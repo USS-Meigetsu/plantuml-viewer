@@ -1,8 +1,11 @@
-# MassiveDyno UML Canvas
+# UML Canvas
 
 大きなPlantUML図を、ブラウザだけで安全に描画・確認できる日本語ビューアーです。
 
 **公開サイト:** https://plantuml.massivedyno.com
+
+開発の背景、設計判断、実装の仕組み、機能追加の経緯は
+[開発ストーリーと技術解説](docs/development-story.md)にまとめています。
 
 ## 特長
 

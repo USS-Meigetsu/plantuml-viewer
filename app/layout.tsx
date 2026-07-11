@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "MassiveDyno UML Canvas — PlantUMLを自由に確認・編集",
+  title: "UML Canvas — PlantUMLを自由に確認・編集",
   description:
     "PlantUMLをブラウザ内で描画し、拡大・縮小・移動・全画面表示・画像保存ができるビューアーです。",
   icons: {

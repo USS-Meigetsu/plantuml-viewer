@@ -1,4 +1,4 @@
-# MassiveDyno UML Canvas 運用ルール
+# UML Canvas 運用ルール
 
 ## 正本と公開先
 
