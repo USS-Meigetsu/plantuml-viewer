@@ -2927,11 +2927,11 @@ export default function PlantUmlWorkspace() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div className="brand" aria-label="PlantUML Viewer">
+        <div className="brand" aria-label="MassiveDyno UML Canvas">
           <span className="brand-mark" aria-hidden="true">
             <Braces size={23} strokeWidth={2.2} />
           </span>
-          <span>PlantUML Viewer</span>
+          <span>MassiveDyno UML Canvas</span>
         </div>
         <div className="privacy-note" title="コードは外部サーバーへ送信されません">
           <ShieldCheck size={19} aria-hidden="true" />

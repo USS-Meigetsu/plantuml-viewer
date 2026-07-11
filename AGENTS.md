@@ -1,4 +1,4 @@
-# PlantUML Viewer 運用ルール
+# MassiveDyno UML Canvas 運用ルール
 
 ## 正本と公開先
 

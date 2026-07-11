@@ -1,4 +1,4 @@
-# PlantUML Viewer
+# MassiveDyno UML Canvas
 
 大きなPlantUML図を、ブラウザだけで安全に描画・確認できる日本語ビューアーです。
 
