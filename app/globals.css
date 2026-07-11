@@ -718,6 +718,30 @@ kbd {
   margin-bottom: 12px;
 }
 
+.activity-history-buttons .activity-diff-button {
+  grid-column: 1 / -1;
+}
+
+.activity-diff-button > span {
+  display: inline-flex;
+  gap: 5px;
+  margin-left: auto;
+  font-size: 10px;
+  font-style: normal;
+}
+
+.activity-diff-button b,
+.source-diff-heading b {
+  color: #177245;
+}
+
+.activity-diff-button em,
+.source-diff-heading em {
+  color: #b23a48;
+  font-style: normal;
+  font-weight: 700;
+}
+
 .activity-history-buttons button,
 .activity-action-grid button,
 .activity-primary-action {
@@ -825,6 +849,159 @@ kbd {
   border-radius: 7px;
   background: #edf7f2;
   color: #176346;
+  font-weight: 650;
+}
+
+.source-diff-panel {
+  position: absolute;
+  z-index: 15;
+  top: 72px;
+  right: 368px;
+  bottom: 18px;
+  left: 18px;
+  display: grid;
+  min-width: 0;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid #b8c6d9;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 22px 60px rgba(24, 48, 86, 0.26);
+  color: var(--ink);
+  cursor: default;
+  user-select: text;
+}
+
+.source-diff-heading {
+  display: flex;
+  min-height: 55px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 13px 10px 16px;
+  border-bottom: 1px solid #dce4ef;
+}
+
+.source-diff-heading > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 13px;
+}
+
+.source-diff-heading strong {
+  font-size: 14px;
+}
+
+.source-diff-heading span {
+  display: inline-flex;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.source-diff-heading button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.source-diff-heading button:hover {
+  background: #edf2f8;
+  color: var(--ink);
+}
+
+.source-diff-legend {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 13px;
+  padding: 6px 16px;
+  border-bottom: 1px solid #e4eaf2;
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.source-diff-legend .is-removed {
+  color: #a83241;
+  font-weight: 700;
+}
+
+.source-diff-legend .is-added {
+  color: #146a3e;
+  font-weight: 700;
+}
+
+.source-diff-content {
+  overflow: auto;
+  padding: 8px 0;
+  background: #fbfcfe;
+  outline: 0;
+}
+
+.source-diff-line {
+  display: grid;
+  min-width: max-content;
+  grid-template-columns: 24px 48px 48px minmax(420px, 1fr);
+  min-height: 25px;
+  align-items: stretch;
+  border-left: 3px solid transparent;
+  font: 12px/1.65 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", monospace;
+}
+
+.source-diff-line.is-added {
+  border-left-color: #31a468;
+  background: #eaf8ef;
+}
+
+.source-diff-line.is-removed {
+  border-left-color: #d65b68;
+  background: #fff0f1;
+}
+
+.source-diff-marker,
+.source-diff-line-number {
+  display: grid;
+  place-items: center;
+  color: #8a99ad;
+  user-select: none;
+}
+
+.source-diff-line.is-added .source-diff-marker {
+  color: #177245;
+  font-weight: 800;
+}
+
+.source-diff-line.is-removed .source-diff-marker {
+  color: #b23a48;
+  font-weight: 800;
+}
+
+.source-diff-line-number {
+  border-right: 1px solid rgba(177, 190, 208, 0.45);
+  font-size: 10px;
+}
+
+.source-diff-line code {
+  padding: 2px 12px;
+  white-space: pre;
+}
+
+.source-diff-skip {
+  padding: 5px 16px 5px 123px;
+  border-top: 1px dashed #ccd6e4;
+  border-bottom: 1px dashed #ccd6e4;
+  background: #f1f5f9;
+  color: #74849a;
+  font-size: 10px;
   font-weight: 650;
 }
 
@@ -1366,6 +1543,31 @@ kbd {
     right: 10px;
     width: min(340px, calc(100% - 20px));
     max-height: calc(100% - 72px);
+  }
+
+  .source-diff-panel {
+    top: 62px;
+    right: 10px;
+    bottom: 10px;
+    left: 10px;
+  }
+
+  .source-diff-heading > div {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .source-diff-legend span:last-child {
+    display: none;
+  }
+
+  .source-diff-line {
+    grid-template-columns: 20px 36px 36px minmax(300px, 1fr);
+  }
+
+  .source-diff-skip {
+    padding-left: 95px;
   }
 
   .tool-button,

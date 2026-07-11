@@ -162,6 +162,12 @@ type ActivityShape = {
   height: number;
 };
 type ActivityDropPosition = "before" | "after";
+type SourceDiffLine = {
+  type: "same" | "added" | "removed" | "skip";
+  oldLine: number | null;
+  newLine: number | null;
+  text: string;
+};
 let enginePromise: Promise<EngineModule> | null = null;
 let renderQueue: Promise<void> = Promise.resolve();
 
@@ -651,6 +657,128 @@ function moveActivityOnce(source: string, index: number, direction: -1 | 1) {
   };
 }
 
+function createSourceDiff(before: string, after: string): SourceDiffLine[] {
+  const beforeLines = before.split(/\r\n|\r|\n/);
+  const afterLines = after.split(/\r\n|\r|\n/);
+  const rows = beforeLines.length + 1;
+  const columns = afterLines.length + 1;
+
+  // Visual edits normally change only a few lines. For exceptionally large,
+  // completely different inputs, avoid allocating an unbounded LCS table.
+  if (rows * columns > 4_000_000) {
+    return [
+      ...beforeLines.map((text, index) => ({
+        type: "removed" as const,
+        oldLine: index + 1,
+        newLine: null,
+        text,
+      })),
+      ...afterLines.map((text, index) => ({
+        type: "added" as const,
+        oldLine: null,
+        newLine: index + 1,
+        text,
+      })),
+    ];
+  }
+
+  const lengths = Array.from(
+    { length: rows },
+    () => new Uint32Array(columns),
+  );
+  for (let oldIndex = beforeLines.length - 1; oldIndex >= 0; oldIndex -= 1) {
+    for (let newIndex = afterLines.length - 1; newIndex >= 0; newIndex -= 1) {
+      lengths[oldIndex][newIndex] =
+        beforeLines[oldIndex] === afterLines[newIndex]
+          ? lengths[oldIndex + 1][newIndex + 1] + 1
+          : Math.max(
+              lengths[oldIndex + 1][newIndex],
+              lengths[oldIndex][newIndex + 1],
+            );
+    }
+  }
+
+  const diff: SourceDiffLine[] = [];
+  let oldIndex = 0;
+  let newIndex = 0;
+  while (oldIndex < beforeLines.length || newIndex < afterLines.length) {
+    if (
+      oldIndex < beforeLines.length &&
+      newIndex < afterLines.length &&
+      beforeLines[oldIndex] === afterLines[newIndex]
+    ) {
+      diff.push({
+        type: "same",
+        oldLine: oldIndex + 1,
+        newLine: newIndex + 1,
+        text: beforeLines[oldIndex],
+      });
+      oldIndex += 1;
+      newIndex += 1;
+    } else if (
+      newIndex < afterLines.length &&
+      (oldIndex >= beforeLines.length ||
+        lengths[oldIndex][newIndex + 1] > lengths[oldIndex + 1][newIndex])
+    ) {
+      diff.push({
+        type: "added",
+        oldLine: null,
+        newLine: newIndex + 1,
+        text: afterLines[newIndex],
+      });
+      newIndex += 1;
+    } else {
+      diff.push({
+        type: "removed",
+        oldLine: oldIndex + 1,
+        newLine: null,
+        text: beforeLines[oldIndex],
+      });
+      oldIndex += 1;
+    }
+  }
+
+  const changedIndexes = diff
+    .map((line, index) => (line.type === "same" ? -1 : index))
+    .filter((index) => index >= 0);
+  if (!changedIndexes.length) return [];
+
+  const visible = new Set<number>();
+  for (const index of changedIndexes) {
+    for (
+      let contextIndex = Math.max(0, index - 3);
+      contextIndex <= Math.min(diff.length - 1, index + 3);
+      contextIndex += 1
+    ) {
+      visible.add(contextIndex);
+    }
+  }
+
+  const compact: SourceDiffLine[] = [];
+  let previousIndex = -2;
+  for (const index of [...visible].sort((a, b) => a - b)) {
+    if (index > previousIndex + 1) {
+      compact.push({
+        type: "skip",
+        oldLine: null,
+        newLine: null,
+        text: `${index - previousIndex - 1}行を省略`,
+      });
+    }
+    compact.push(diff[index]);
+    previousIndex = index;
+  }
+  if (previousIndex < diff.length - 1) {
+    compact.push({
+      type: "skip",
+      oldLine: null,
+      newLine: null,
+      text: `${diff.length - previousIndex - 1}行を省略`,
+    });
+  }
+  return compact;
+}
+
 function readSvgNumber(element: Element, attribute: string) {
   const value = Number.parseFloat(element.getAttribute(attribute) ?? "");
   return Number.isFinite(value) ? value : null;
@@ -832,6 +960,8 @@ export default function PlantUmlWorkspace() {
   const [selectedActivityKey, setSelectedActivityKey] = useState("");
   const [activityLabelDraft, setActivityLabelDraft] = useState("");
   const [editMessage, setEditMessage] = useState("");
+  const [editBaseline, setEditBaseline] = useState("");
+  const [isDiffOpen, setIsDiffOpen] = useState(false);
   const [draggedActivityKey, setDraggedActivityKey] = useState("");
   const [activityDropTarget, setActivityDropTarget] = useState<{
     key: string;
@@ -907,6 +1037,17 @@ export default function PlantUmlWorkspace() {
       editableActivities.find((activity) => activity.key === selectedActivityKey) ??
       null,
     [editableActivities, selectedActivityKey],
+  );
+  const sourceDiff = useMemo(
+    () => (editBaseline ? createSourceDiff(editBaseline, source) : []),
+    [editBaseline, source],
+  );
+  const sourceDiffSummary = useMemo(
+    () => ({
+      added: sourceDiff.filter((line) => line.type === "added").length,
+      removed: sourceDiff.filter((line) => line.type === "removed").length,
+    }),
+    [sourceDiff],
   );
   const selectedActivityIndex = selectedActivity
     ? editableActivities.findIndex((activity) => activity.key === selectedActivity.key)
@@ -2095,8 +2236,13 @@ export default function PlantUmlWorkspace() {
                   const next = !isEditMode;
                   setIsEditMode(next);
                   setEditMessage("");
-                  if (next && !selectedActivityKey) {
-                    selectEditableActivity(editableActivities[0]?.key ?? "");
+                  setIsDiffOpen(false);
+                  if (next) {
+                    setEditBaseline(source);
+                    setEditHistory({ past: [], future: [] });
+                    if (!selectedActivityKey) {
+                      selectEditableActivity(editableActivities[0]?.key ?? "");
+                    }
                   }
                 }}
               >
@@ -2255,7 +2401,10 @@ export default function PlantUmlWorkspace() {
                   <button
                     type="button"
                     className="activity-editor-close"
-                    onClick={() => setIsEditMode(false)}
+                    onClick={() => {
+                      setIsEditMode(false);
+                      setIsDiffOpen(false);
+                    }}
                     aria-label="編集モードを終了"
                   >
                     <X size={17} />
@@ -2276,6 +2425,20 @@ export default function PlantUmlWorkspace() {
                     disabled={editHistory.future.length === 0}
                   >
                     <Redo2 size={15} /> やり直す
+                  </button>
+                  <button
+                    type="button"
+                    className="activity-diff-button"
+                    onClick={() => setIsDiffOpen(true)}
+                    disabled={sourceDiff.length === 0}
+                  >
+                    <FileCode2 size={15} /> コード差分
+                    {sourceDiff.length > 0 && (
+                      <span aria-label={`追加${sourceDiffSummary.added}行、削除${sourceDiffSummary.removed}行`}>
+                        <b>+{sourceDiffSummary.added}</b>
+                        <em>−{sourceDiffSummary.removed}</em>
+                      </span>
+                    )}
                   </button>
                 </div>
 
@@ -2383,6 +2546,68 @@ export default function PlantUmlWorkspace() {
                   箱を別の箱の上半分・下半分へドロップすると、その前・後へ移動します。分岐・ループの境界は越えられません。
                 </p>
               </aside>
+            )}
+
+            {isEditMode && isDiffOpen && (
+              <section
+                className="source-diff-panel"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="source-diff-title"
+                onPointerDown={(event) => event.stopPropagation()}
+                onWheel={(event) => event.stopPropagation()}
+              >
+                <div className="source-diff-heading">
+                  <div>
+                    <strong id="source-diff-title">編集前後のコード差分</strong>
+                    <span>
+                      <b>+{sourceDiffSummary.added} 追加</b>
+                      <em>−{sourceDiffSummary.removed} 削除</em>
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsDiffOpen(false)}
+                    aria-label="コード差分を閉じる"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+                <div className="source-diff-legend" aria-hidden="true">
+                  <span className="is-removed">− 編集前</span>
+                  <span className="is-added">+ 編集後</span>
+                  <span>変更箇所の前後3行を表示</span>
+                </div>
+                <div className="source-diff-content" tabIndex={0}>
+                  {sourceDiff.map((line, index) =>
+                    line.type === "skip" ? (
+                      <div className="source-diff-skip" key={`skip-${index}`}>
+                        ⋯ {line.text} ⋯
+                      </div>
+                    ) : (
+                      <div
+                        className={`source-diff-line is-${line.type}`}
+                        key={`${line.type}-${line.oldLine}-${line.newLine}-${index}`}
+                      >
+                        <span className="source-diff-marker" aria-hidden="true">
+                          {line.type === "added"
+                            ? "+"
+                            : line.type === "removed"
+                              ? "−"
+                              : " "}
+                        </span>
+                        <span className="source-diff-line-number">
+                          {line.oldLine ?? ""}
+                        </span>
+                        <span className="source-diff-line-number">
+                          {line.newLine ?? ""}
+                        </span>
+                        <code>{line.text || " "}</code>
+                      </div>
+                    ),
+                  )}
+                </div>
+              </section>
             )}
 
             {laneGuideSegments.length > 0 && (
