@@ -802,6 +802,43 @@ kbd {
   font-size: 10px;
 }
 
+.activity-structure-button {
+  display: grid;
+  width: 100%;
+  min-height: 50px;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 12px;
+  padding: 7px 10px;
+  border: 1px solid #bdcbe0;
+  border-radius: 9px;
+  background: #f4f7fc;
+  color: #344a6d;
+  cursor: pointer;
+}
+
+.activity-structure-button:hover {
+  border-color: #7fa3dc;
+  background: #edf3ff;
+  color: #2458cd;
+}
+
+.activity-structure-button > span {
+  display: grid;
+  gap: 1px;
+  text-align: left;
+}
+
+.activity-structure-button b {
+  font-size: 12px;
+}
+
+.activity-structure-button small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .activity-history-buttons .activity-diff-button {
   grid-column: 1 / -1;
 }
@@ -954,6 +991,266 @@ kbd {
   color: var(--ink);
   cursor: default;
   user-select: text;
+}
+
+.structure-editor-panel {
+  position: absolute;
+  z-index: 15;
+  top: 72px;
+  right: 368px;
+  bottom: 18px;
+  left: 18px;
+  display: grid;
+  min-width: 0;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid #b8c6d9;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 22px 60px rgba(24, 48, 86, 0.26);
+  color: var(--ink);
+  cursor: default;
+  user-select: text;
+}
+
+.structure-editor-heading {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 13px 10px 16px;
+  border-bottom: 1px solid #dce4ef;
+}
+
+.structure-editor-heading > div {
+  display: grid;
+  gap: 2px;
+}
+
+.structure-editor-heading strong {
+  font-size: 15px;
+}
+
+.structure-editor-heading span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.structure-editor-heading > button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.structure-editor-heading > button:hover {
+  background: #edf2f8;
+  color: var(--ink);
+}
+
+.structure-editor-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid #dce4ef;
+  background: #f8fafc;
+}
+
+.structure-editor-tabs button {
+  min-height: 42px;
+  padding: 5px 8px;
+  border: 0;
+  border-right: 1px solid #e0e7f0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: #65758b;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.structure-editor-tabs button:last-child {
+  border-right: 0;
+}
+
+.structure-editor-tabs button:hover,
+.structure-editor-tabs button.is-active {
+  background: #edf3ff;
+  color: #2458cd;
+}
+
+.structure-editor-tabs button.is-active {
+  border-bottom-color: #2563eb;
+}
+
+.structure-editor-content {
+  overflow: auto;
+  padding: 18px;
+  background: #fbfcfe;
+}
+
+.structure-editor-section {
+  display: grid;
+  max-width: 720px;
+  gap: 14px;
+  margin: 0 auto;
+}
+
+.structure-editor-section h3,
+.structure-editor-section p {
+  margin: 0;
+}
+
+.structure-editor-section h3 {
+  font-size: 16px;
+}
+
+.structure-editor-section p {
+  color: #607087;
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.structure-field {
+  display: grid;
+  gap: 6px;
+}
+
+.structure-field > span {
+  color: #4c5b72;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.structure-field input,
+.structure-field select {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid #c8d4e3;
+  border-radius: 8px;
+  background: #fff;
+  color: #26364f;
+  font: inherit;
+  font-size: 12px;
+  outline: 0;
+}
+
+.structure-field input:focus,
+.structure-field select:focus {
+  border-color: #6e9bf3;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.13);
+}
+
+.structure-two-columns,
+.structure-branch-choice,
+.fork-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.structure-primary-action,
+.structure-branch-choice button,
+.fork-actions button {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 7px 11px;
+  border: 1px solid #c5d2e3;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #35445c;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 720;
+}
+
+.structure-primary-action {
+  border-color: #2458cd;
+  background: #2563eb;
+  color: #fff;
+}
+
+.structure-primary-action:hover:not(:disabled) {
+  background: #1749b5;
+}
+
+.structure-branch-choice button.is-active {
+  border-color: #6190ea;
+  background: #eaf1ff;
+  color: #1749b5;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.11);
+}
+
+.structure-primary-action:disabled,
+.fork-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.control-editor-card {
+  display: grid;
+  gap: 13px;
+  padding: 14px;
+  border: 1px solid #d5dfeb;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.fork-branch-list {
+  display: grid;
+  gap: 7px;
+}
+
+.fork-branch-list button {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  padding: 7px 10px;
+  border: 1px solid #d1dce9;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #47566c;
+  cursor: pointer;
+  text-align: left;
+}
+
+.fork-branch-list button.is-active {
+  border-color: #6190ea;
+  background: #eaf1ff;
+  color: #1749b5;
+}
+
+.fork-branch-list button span {
+  overflow: hidden;
+  font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fork-actions .is-danger {
+  border-color: #efc7cb;
+  background: #fff5f5;
+  color: #a52f39;
+}
+
+.structure-empty {
+  padding: 22px;
+  border: 1px dashed #c6d2e0;
+  border-radius: 10px;
+  background: #f8fafc;
+  text-align: center;
 }
 
 .source-diff-heading {
@@ -1634,6 +1931,31 @@ kbd {
     right: 10px;
     bottom: 10px;
     left: 10px;
+  }
+
+  .structure-editor-panel {
+    top: 62px;
+    right: 10px;
+    bottom: 10px;
+    left: 10px;
+  }
+
+  .structure-editor-tabs {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .structure-editor-tabs button:nth-child(2) {
+    border-right: 0;
+  }
+
+  .structure-editor-content {
+    padding: 14px;
+  }
+
+  .structure-two-columns,
+  .structure-branch-choice,
+  .fork-actions {
+    grid-template-columns: 1fr;
   }
 
   .source-diff-heading > div {

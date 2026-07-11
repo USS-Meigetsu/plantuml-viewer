@@ -14,7 +14,9 @@ import {
   Expand,
   FileCode2,
   Focus,
+  GitBranch,
   GripVertical,
+  Link2,
   LoaderCircle,
   Maximize2,
   Minus,
@@ -169,6 +171,31 @@ type SourceDiffLine = {
   newLine: number | null;
   text: string;
 };
+type IfStructure = {
+  startLine: number;
+  elseLine: number;
+  endLine: number;
+  indent: string;
+  condition: string;
+  yesLabel: string;
+  noLabel: string;
+};
+type WhileStructure = {
+  startLine: number;
+  endLine: number;
+  indent: string;
+  condition: string;
+  yesLabel: string;
+  noLabel: string;
+};
+type ForkBranch = { lines: string[] };
+type ForkStructure = {
+  startLine: number;
+  endLine: number;
+  indent: string;
+  branches: ForkBranch[];
+};
+type StructureEditorTab = "add-if" | "move-branch" | "connection" | "control";
 let enginePromise: Promise<EngineModule> | null = null;
 let renderQueue: Promise<void> = Promise.resolve();
 
@@ -505,6 +532,135 @@ function parseEditableActivities(source: string): EditableActivity[] {
     index = endLine;
   }
   return activities;
+}
+
+function parseIfStructures(source: string): IfStructure[] {
+  const lines = source.split(/\r\n|\r|\n/);
+  const stack: Array<Omit<IfStructure, "elseLine" | "endLine" | "noLabel"> & {
+    elseLine: number;
+    noLabel: string;
+  }> = [];
+  const structures: IfStructure[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    const start = trimmed.match(/^if\s*\((.*)\)\s*then\s*\((.*)\)\s*$/i);
+    if (start) {
+      stack.push({
+        startLine: index,
+        indent: line.match(/^\s*/)?.[0] ?? "",
+        condition: start[1].trim(),
+        yesLabel: start[2].trim() || "はい",
+        elseLine: -1,
+        noLabel: "いいえ",
+      });
+      continue;
+    }
+    const alternate = trimmed.match(/^else(?:\s*\((.*)\))?\s*$/i);
+    if (alternate && stack.length) {
+      const current = stack[stack.length - 1];
+      if (current.elseLine < 0) {
+        current.elseLine = index;
+        current.noLabel = alternate[1]?.trim() || "いいえ";
+      }
+      continue;
+    }
+    if (/^endif\b/i.test(trimmed) && stack.length) {
+      const current = stack.pop()!;
+      if (current.elseLine >= 0) {
+        structures.push({ ...current, endLine: index });
+      }
+    }
+  }
+  return structures.sort((a, b) => a.startLine - b.startLine);
+}
+
+function parseWhileStructures(source: string): WhileStructure[] {
+  const lines = source.split(/\r\n|\r|\n/);
+  const stack: Array<Omit<WhileStructure, "endLine" | "noLabel">> = [];
+  const structures: WhileStructure[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    const start =
+      trimmed.match(/^while\s*\((.*)\)\s+is\s*\((.*)\)\s*$/i) ??
+      trimmed.match(/^while\s*\((.*)\)\s*$/i);
+    if (start) {
+      stack.push({
+        startLine: index,
+        indent: line.match(/^\s*/)?.[0] ?? "",
+        condition: start[1].trim(),
+        yesLabel: start[2]?.trim() || "はい",
+      });
+      continue;
+    }
+    const end = trimmed.match(/^endwhile(?:\s*\((.*)\))?\s*$/i);
+    if (end && stack.length) {
+      const current = stack.pop()!;
+      structures.push({
+        ...current,
+        endLine: index,
+        noLabel: end[1]?.trim() || "いいえ",
+      });
+    }
+  }
+  return structures.sort((a, b) => a.startLine - b.startLine);
+}
+
+function parseForkStructures(source: string): ForkStructure[] {
+  const lines = source.split(/\r\n|\r|\n/);
+  const stack: Array<{
+    startLine: number;
+    indent: string;
+    separators: number[];
+  }> = [];
+  const structures: ForkStructure[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    if (/^fork\s+again\b/i.test(trimmed) && stack.length) {
+      stack[stack.length - 1].separators.push(index);
+      continue;
+    }
+    if (/^fork\b/i.test(trimmed)) {
+      stack.push({
+        startLine: index,
+        indent: line.match(/^\s*/)?.[0] ?? "",
+        separators: [],
+      });
+      continue;
+    }
+    if (/^(?:end\s*fork|endfork)\b/i.test(trimmed) && stack.length) {
+      const current = stack.pop()!;
+      const boundaries = [current.startLine, ...current.separators, index];
+      const branches = boundaries.slice(0, -1).map((boundary, branchIndex) => ({
+        lines: lines.slice(boundary + 1, boundaries[branchIndex + 1]),
+      }));
+      structures.push({
+        startLine: current.startLine,
+        endLine: index,
+        indent: current.indent,
+        branches,
+      });
+    }
+  }
+  return structures.sort((a, b) => a.startLine - b.startLine);
+}
+
+function getActiveLaneAtLine(source: string, lineIndex: number) {
+  const lines = source.split(/\r\n|\r|\n/);
+  let lane = "主体未指定";
+  for (let index = 0; index < Math.min(lineIndex, lines.length); index += 1) {
+    const parsed = parseSwimlaneLine(lines[index]);
+    if (parsed) lane = parsed.name;
+  }
+  return lane;
+}
+
+function reindentLines(lines: string[], fromIndent: string, toIndent: string) {
+  return lines.map((line) =>
+    line.startsWith(fromIndent) ? `${toIndent}${line.slice(fromIndent.length)}` : line,
+  );
 }
 
 function getSvgTextPosition(element: Element) {
@@ -963,6 +1119,20 @@ export default function PlantUmlWorkspace() {
   const [editMessage, setEditMessage] = useState("");
   const [editBaseline, setEditBaseline] = useState("");
   const [isDiffOpen, setIsDiffOpen] = useState(false);
+  const [isStructureEditorOpen, setIsStructureEditorOpen] = useState(false);
+  const [structureEditorTab, setStructureEditorTab] =
+    useState<StructureEditorTab>("add-if");
+  const [newIfCondition, setNewIfCondition] = useState("条件を入力");
+  const [newIfYesAction, setNewIfYesAction] = useState("はい側の処理");
+  const [newIfNoAction, setNewIfNoAction] = useState("いいえ側の処理");
+  const [selectedIfStartLine, setSelectedIfStartLine] = useState(-1);
+  const [selectedIfBranch, setSelectedIfBranch] = useState<"yes" | "no">("yes");
+  const [connectionTargetKey, setConnectionTargetKey] = useState("");
+  const [selectedControlKey, setSelectedControlKey] = useState("");
+  const [whileConditionDraft, setWhileConditionDraft] = useState("");
+  const [whileYesLabelDraft, setWhileYesLabelDraft] = useState("はい");
+  const [whileNoLabelDraft, setWhileNoLabelDraft] = useState("いいえ");
+  const [selectedForkBranch, setSelectedForkBranch] = useState(0);
   const [draggedActivityKey, setDraggedActivityKey] = useState("");
   const [activityDropTarget, setActivityDropTarget] = useState<{
     key: string;
@@ -1050,6 +1220,9 @@ export default function PlantUmlWorkspace() {
     () => parseEditableActivities(source),
     [source],
   );
+  const ifStructures = useMemo(() => parseIfStructures(source), [source]);
+  const whileStructures = useMemo(() => parseWhileStructures(source), [source]);
+  const forkStructures = useMemo(() => parseForkStructures(source), [source]);
   const swimlaneNames = useMemo(() => getSourceSwimlaneNames(source), [source]);
   const targetSwimlane = useMemo(
     () => swimlanes.find((lane) => lane.name === activityLaneTarget) ?? null,
@@ -1060,6 +1233,34 @@ export default function PlantUmlWorkspace() {
       editableActivities.find((activity) => activity.key === selectedActivityKey) ??
       null,
     [editableActivities, selectedActivityKey],
+  );
+  const selectedIfStructure = useMemo(
+    () =>
+      ifStructures.find((structure) => structure.startLine === selectedIfStartLine) ??
+      ifStructures[0] ??
+      null,
+    [ifStructures, selectedIfStartLine],
+  );
+  const selectedWhileStructure = useMemo(() => {
+    if (!selectedControlKey.startsWith("while:")) return null;
+    const startLine = Number(selectedControlKey.slice("while:".length));
+    return whileStructures.find((structure) => structure.startLine === startLine) ?? null;
+  }, [selectedControlKey, whileStructures]);
+  const selectedForkStructure = useMemo(() => {
+    if (!selectedControlKey.startsWith("fork:")) return null;
+    const startLine = Number(selectedControlKey.slice("fork:".length));
+    return forkStructures.find((structure) => structure.startLine === startLine) ?? null;
+  }, [forkStructures, selectedControlKey]);
+  const connectionTargets = useMemo(
+    () =>
+      selectedActivity
+        ? editableActivities.filter(
+            (activity) =>
+              activity.key !== selectedActivity.key &&
+              activity.context === selectedActivity.context,
+          )
+        : [],
+    [editableActivities, selectedActivity],
   );
   const sourceDiff = useMemo(
     () => (editBaseline ? createSourceDiff(editBaseline, source) : []),
@@ -1563,6 +1764,231 @@ export default function PlantUmlWorkspace() {
     );
   };
 
+  const addConditionAfterSelected = () => {
+    if (!selectedActivity) return;
+    const condition = newIfCondition.trim();
+    const yesAction = newIfYesAction.trim();
+    const noAction = newIfNoAction.trim();
+    if (!condition || !yesAction || !noAction) {
+      setEditMessage("条件・はい側・いいえ側をすべて入力してください");
+      return;
+    }
+    if ([condition, yesAction, noAction].some((value) => value.includes(";"))) {
+      setEditMessage("入力欄には半角セミコロン（;）を使用できません");
+      return;
+    }
+    const indent = selectedActivity.indent;
+    const nextLines = source.split(/\r\n|\r|\n/);
+    nextLines.splice(
+      selectedActivity.endLine + 1,
+      0,
+      `${indent}if (${condition}) then (はい)`,
+      `${indent}  :${yesAction};`,
+      `${indent}else (いいえ)`,
+      `${indent}  :${noAction};`,
+      `${indent}endif`,
+    );
+    applyVisualEdit(
+      nextLines.join("\n"),
+      "選択した箱の後に条件分岐を追加しました",
+      selectedActivityIndex + 1,
+    );
+  };
+
+  const moveSelectedActivityToBranch = () => {
+    if (!selectedActivity || !selectedIfStructure) return;
+    const removedLineCount = selectedActivity.endLine - selectedActivity.startLine + 1;
+    const adjustedIfStart =
+      selectedActivity.endLine < selectedIfStructure.startLine
+        ? selectedIfStructure.startLine - removedLineCount
+        : selectedIfStructure.startLine;
+    const withoutActivity = replaceSourceLines(
+      source,
+      selectedActivity.startLine,
+      selectedActivity.endLine,
+      [],
+    );
+    const nextStructure = parseIfStructures(withoutActivity).find(
+      (structure) => structure.startLine === adjustedIfStart,
+    );
+    if (!nextStructure) {
+      setEditMessage("移動先の条件分岐を安全に特定できませんでした");
+      return;
+    }
+    const insertAt =
+      selectedIfBranch === "yes" ? nextStructure.elseLine : nextStructure.endLine;
+    const activeLane = getActiveLaneAtLine(withoutActivity, insertAt);
+    const directives = getSwimlaneDirectives(withoutActivity);
+    const targetIndent = `${nextStructure.indent}  `;
+    const insertion: string[] = [];
+    if (activeLane !== selectedActivity.lane) {
+      insertion.push(
+        `${targetIndent}${directives.get(selectedActivity.lane) ?? `|${selectedActivity.lane}|`}`,
+      );
+    }
+    insertion.push(
+      ...reindentLines(selectedActivity.rawLines, selectedActivity.indent, targetIndent),
+    );
+    if (activeLane !== selectedActivity.lane) {
+      insertion.push(
+        `${targetIndent}${directives.get(activeLane) ?? `|${activeLane}|`}`,
+      );
+    }
+    const nextLines = withoutActivity.split(/\r\n|\r|\n/);
+    nextLines.splice(insertAt, 0, ...insertion);
+    const nextSource = nextLines.join("\n");
+    const nextActivities = parseEditableActivities(nextSource);
+    const movedIndex = nextActivities.findIndex(
+      (activity) =>
+        activity.startLine >= insertAt &&
+        normalizeActivityLabel(activity.label) ===
+          normalizeActivityLabel(selectedActivity.label),
+    );
+    applyVisualEdit(
+      nextSource,
+      `箱を「${selectedIfBranch === "yes" ? "はい" : "いいえ"}」側へ移動しました`,
+      movedIndex >= 0 ? movedIndex : selectedActivityIndex,
+    );
+  };
+
+  const connectSelectedActivityToTarget = () => {
+    if (!selectedActivity || !connectionTargetKey) return;
+    const target = editableActivities.find(
+      (activity) => activity.key === connectionTargetKey,
+    );
+    if (!target || target.context !== selectedActivity.context) {
+      setEditMessage("同じ直列フロー内の箱だけを接続先にできます");
+      return;
+    }
+    if (reorderActivityByDrop(selectedActivity.key, target.key, "before")) {
+      setEditMessage("選択した箱の次の接続先を変更しました");
+    }
+  };
+
+  const loadWhileDrafts = (structure: WhileStructure) => {
+    setWhileConditionDraft(structure.condition);
+    setWhileYesLabelDraft(structure.yesLabel);
+    setWhileNoLabelDraft(structure.noLabel);
+  };
+
+  const applyWhileStructureEdit = () => {
+    if (!selectedWhileStructure) return;
+    const condition = whileConditionDraft.trim();
+    const yesLabel = whileYesLabelDraft.trim();
+    const noLabel = whileNoLabelDraft.trim();
+    if (!condition || !yesLabel || !noLabel) {
+      setEditMessage("whileの条件・継続・終了ラベルを入力してください");
+      return;
+    }
+    const nextLines = source.split(/\r\n|\r|\n/);
+    nextLines[selectedWhileStructure.startLine] =
+      `${selectedWhileStructure.indent}while (${condition}) is (${yesLabel})`;
+    nextLines[selectedWhileStructure.endLine] =
+      `${selectedWhileStructure.indent}endwhile (${noLabel})`;
+    applyVisualEdit(nextLines.join("\n"), "whileの条件とラベルを変更しました");
+  };
+
+  const replaceForkBranches = (
+    structure: ForkStructure,
+    branches: ForkBranch[],
+    nextBranchIndex: number,
+    message: string,
+  ) => {
+    const body: string[] = [];
+    branches.forEach((branch, index) => {
+      if (index > 0) body.push(`${structure.indent}fork again`);
+      body.push(...branch.lines);
+    });
+    const nextSource = replaceSourceLines(
+      source,
+      structure.startLine + 1,
+      structure.endLine - 1,
+      body,
+    );
+    setSelectedForkBranch(nextBranchIndex);
+    applyVisualEdit(nextSource, message);
+  };
+
+  const addForkBranch = () => {
+    if (!selectedForkStructure) return;
+    const branches = [
+      ...selectedForkStructure.branches,
+      { lines: [`${selectedForkStructure.indent}  :新しい並列処理;`] },
+    ];
+    replaceForkBranches(
+      selectedForkStructure,
+      branches,
+      branches.length - 1,
+      "forkに新しい枝を追加しました",
+    );
+  };
+
+  const moveForkBranch = (direction: -1 | 1) => {
+    if (!selectedForkStructure) return;
+    const nextIndex = selectedForkBranch + direction;
+    if (nextIndex < 0 || nextIndex >= selectedForkStructure.branches.length) return;
+    const branches = [...selectedForkStructure.branches];
+    [branches[selectedForkBranch], branches[nextIndex]] = [
+      branches[nextIndex],
+      branches[selectedForkBranch],
+    ];
+    replaceForkBranches(
+      selectedForkStructure,
+      branches,
+      nextIndex,
+      "forkの枝を並べ替えました",
+    );
+  };
+
+  const deleteForkBranch = () => {
+    if (!selectedForkStructure || selectedForkStructure.branches.length <= 2) {
+      setEditMessage("forkには最低2つの枝が必要です");
+      return;
+    }
+    const branches = selectedForkStructure.branches.filter(
+      (_, index) => index !== selectedForkBranch,
+    );
+    replaceForkBranches(
+      selectedForkStructure,
+      branches,
+      Math.min(selectedForkBranch, branches.length - 1),
+      "forkの枝を削除しました",
+    );
+  };
+
+  const chooseControlStructure = (key: string) => {
+    setSelectedControlKey(key);
+    setSelectedForkBranch(0);
+    if (key.startsWith("while:")) {
+      const startLine = Number(key.slice("while:".length));
+      const structure = whileStructures.find(
+        (candidate) => candidate.startLine === startLine,
+      );
+      if (structure) loadWhileDrafts(structure);
+    }
+  };
+
+  const openStructureEditor = () => {
+    setIsDiffOpen(false);
+    setIsStructureEditorOpen(true);
+    setEditMessage("");
+    if (ifStructures.length && selectedIfStartLine < 0) {
+      setSelectedIfStartLine(ifStructures[0].startLine);
+    }
+    if (connectionTargets.length && !connectionTargetKey) {
+      setConnectionTargetKey(connectionTargets[0].key);
+    }
+    if (!selectedControlKey) {
+      const firstWhile = whileStructures[0];
+      const firstFork = forkStructures[0];
+      if (firstWhile) {
+        chooseControlStructure(`while:${firstWhile.startLine}`);
+      } else if (firstFork) {
+        chooseControlStructure(`fork:${firstFork.startLine}`);
+      }
+    }
+  };
+
   const clearActivityDrag = () => {
     activityPointerDragRef.current = null;
     activityDropTargetRef.current = null;
@@ -1590,12 +2016,14 @@ export default function PlantUmlWorkspace() {
     const targetIndex = editableActivities.findIndex(
       (activity) => activity.key === targetKey,
     );
-    if (fromIndex < 0 || targetIndex < 0 || fromIndex === targetIndex) return;
+    if (fromIndex < 0 || targetIndex < 0 || fromIndex === targetIndex) {
+      return false;
+    }
 
     let desiredIndex = targetIndex + (position === "after" ? 1 : 0);
     if (fromIndex < desiredIndex) desiredIndex -= 1;
     desiredIndex = clamp(desiredIndex, 0, editableActivities.length - 1);
-    if (desiredIndex === fromIndex) return;
+    if (desiredIndex === fromIndex) return false;
 
     let nextSource = source;
     let currentIndex = fromIndex;
@@ -1606,7 +2034,7 @@ export default function PlantUmlWorkspace() {
         setEditMessage(
           "分岐・ループの境界を越える位置には移動できません",
         );
-        return;
+        return false;
       }
       nextSource = moved.source;
       currentIndex = moved.index;
@@ -1616,6 +2044,7 @@ export default function PlantUmlWorkspace() {
       "ドラッグした位置へ箱を移動しました",
       currentIndex,
     );
+    return true;
   };
 
   const getActivityDropTargetAtPoint = (
@@ -2402,6 +2831,7 @@ export default function PlantUmlWorkspace() {
                   setIsEditMode(next);
                   setEditMessage("");
                   setIsDiffOpen(false);
+                  setIsStructureEditorOpen(false);
                   if (next) {
                     setEditBaseline(source);
                     setEditHistory({ past: [], future: [] });
@@ -2569,6 +2999,7 @@ export default function PlantUmlWorkspace() {
                     onClick={() => {
                       setIsEditMode(false);
                       setIsDiffOpen(false);
+                      setIsStructureEditorOpen(false);
                     }}
                     aria-label="編集モードを終了"
                   >
@@ -2594,7 +3025,10 @@ export default function PlantUmlWorkspace() {
                   <button
                     type="button"
                     className="activity-diff-button"
-                    onClick={() => setIsDiffOpen(true)}
+                    onClick={() => {
+                      setIsStructureEditorOpen(false);
+                      setIsDiffOpen(true);
+                    }}
                     disabled={sourceDiff.length === 0}
                   >
                     <FileCode2 size={15} /> コード差分
@@ -2622,6 +3056,18 @@ export default function PlantUmlWorkspace() {
                     <small>箱の上半分・下半分へドロップ</small>
                   </span>
                   <GripVertical size={17} aria-hidden="true" />
+                </button>
+
+                <button
+                  type="button"
+                  className="activity-structure-button"
+                  onClick={openStructureEditor}
+                >
+                  <GitBranch size={17} />
+                  <span>
+                    <b>構造編集</b>
+                    <small>条件分岐・接続先・while・fork</small>
+                  </span>
                 </button>
 
                 <label className="activity-field">
@@ -2787,6 +3233,323 @@ export default function PlantUmlWorkspace() {
                         <code>{line.text || " "}</code>
                       </div>
                     ),
+                  )}
+                </div>
+              </section>
+            )}
+
+            {isEditMode && isStructureEditorOpen && (
+              <section
+                className="structure-editor-panel"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="structure-editor-title"
+                onPointerDown={(event) => event.stopPropagation()}
+                onWheel={(event) => event.stopPropagation()}
+              >
+                <div className="structure-editor-heading">
+                  <div>
+                    <strong id="structure-editor-title">構造編集</strong>
+                    <span>安全に変換できるPlantUML構造だけを編集します</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsStructureEditorOpen(false)}
+                    aria-label="構造編集を閉じる"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <div className="structure-editor-tabs" role="tablist">
+                  {([
+                    ["add-if", "分岐を追加"],
+                    ["move-branch", "はい／いいえへ移動"],
+                    ["connection", "接続先を変更"],
+                    ["control", "while・fork"],
+                  ] as Array<[StructureEditorTab, string]>).map(([tab, label]) => (
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={structureEditorTab === tab}
+                      className={structureEditorTab === tab ? "is-active" : ""}
+                      onClick={() => setStructureEditorTab(tab)}
+                      key={tab}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="structure-editor-content">
+                  {structureEditorTab === "add-if" && (
+                    <div className="structure-editor-section">
+                      <h3>選択した箱の後に条件分岐を追加</h3>
+                      <p>
+                        現在選択中：
+                        <strong>
+                          {selectedActivity
+                            ? normalizeActivityLabel(selectedActivity.label)
+                            : "箱が選択されていません"}
+                        </strong>
+                      </p>
+                      <label className="structure-field">
+                        <span>条件</span>
+                        <input
+                          value={newIfCondition}
+                          onChange={(event) => setNewIfCondition(event.target.value)}
+                        />
+                      </label>
+                      <div className="structure-two-columns">
+                        <label className="structure-field">
+                          <span>はい側の最初の箱</span>
+                          <input
+                            value={newIfYesAction}
+                            onChange={(event) => setNewIfYesAction(event.target.value)}
+                          />
+                        </label>
+                        <label className="structure-field">
+                          <span>いいえ側の最初の箱</span>
+                          <input
+                            value={newIfNoAction}
+                            onChange={(event) => setNewIfNoAction(event.target.value)}
+                          />
+                        </label>
+                      </div>
+                      <button
+                        type="button"
+                        className="structure-primary-action"
+                        onClick={addConditionAfterSelected}
+                        disabled={!selectedActivity}
+                      >
+                        <GitBranch size={16} /> 条件分岐を追加
+                      </button>
+                    </div>
+                  )}
+
+                  {structureEditorTab === "move-branch" && (
+                    <div className="structure-editor-section">
+                      <h3>選択した箱を既存の分岐へ移動</h3>
+                      {ifStructures.length ? (
+                        <>
+                          <label className="structure-field">
+                            <span>移動先の条件分岐</span>
+                            <select
+                              value={selectedIfStructure?.startLine ?? ""}
+                              onChange={(event) =>
+                                setSelectedIfStartLine(Number(event.target.value))
+                              }
+                            >
+                              {ifStructures.map((structure) => (
+                                <option
+                                  value={structure.startLine}
+                                  key={structure.startLine}
+                                >
+                                  {`${structure.startLine + 1}行目：${structure.condition}`}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <div className="structure-branch-choice">
+                            <button
+                              type="button"
+                              className={selectedIfBranch === "yes" ? "is-active" : ""}
+                              onClick={() => setSelectedIfBranch("yes")}
+                            >
+                              はい側（{selectedIfStructure?.yesLabel}）
+                            </button>
+                            <button
+                              type="button"
+                              className={selectedIfBranch === "no" ? "is-active" : ""}
+                              onClick={() => setSelectedIfBranch("no")}
+                            >
+                              いいえ側（{selectedIfStructure?.noLabel}）
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            className="structure-primary-action"
+                            onClick={moveSelectedActivityToBranch}
+                            disabled={!selectedActivity || !selectedIfStructure}
+                          >
+                            <GitBranch size={16} /> 選択した箱を移動
+                          </button>
+                        </>
+                      ) : (
+                        <p className="structure-empty">
+                          編集できる if / else / endif 分岐がありません。
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {structureEditorTab === "connection" && (
+                    <div className="structure-editor-section">
+                      <h3>直列フローの次の接続先を変更</h3>
+                      <p>
+                        選択した箱を接続先の直前へ移動し、PlantUMLの暗黙の線を
+                        安全に付け替えます。分岐境界は越えません。
+                      </p>
+                      <label className="structure-field">
+                        <span>次につなぐ箱</span>
+                        <select
+                          value={connectionTargetKey}
+                          onChange={(event) =>
+                            setConnectionTargetKey(event.target.value)
+                          }
+                          disabled={!connectionTargets.length}
+                        >
+                          <option value="">接続先を選択</option>
+                          {connectionTargets.map((activity) => (
+                            <option value={activity.key} key={activity.key}>
+                              {`[${activity.lane}] ${normalizeActivityLabel(activity.label)}`}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        className="structure-primary-action"
+                        onClick={connectSelectedActivityToTarget}
+                        disabled={!selectedActivity || !connectionTargetKey}
+                      >
+                        <Link2 size={16} /> 接続先を変更
+                      </button>
+                    </div>
+                  )}
+
+                  {structureEditorTab === "control" && (
+                    <div className="structure-editor-section">
+                      <h3>while・fork専用編集</h3>
+                      {whileStructures.length || forkStructures.length ? (
+                        <>
+                          <label className="structure-field">
+                            <span>編集する構造</span>
+                            <select
+                              value={selectedControlKey}
+                              onChange={(event) =>
+                                chooseControlStructure(event.target.value)
+                              }
+                            >
+                              {whileStructures.map((structure) => (
+                                <option
+                                  value={`while:${structure.startLine}`}
+                                  key={`while:${structure.startLine}`}
+                                >
+                                  {`while ${structure.startLine + 1}行目：${structure.condition}`}
+                                </option>
+                              ))}
+                              {forkStructures.map((structure) => (
+                                <option
+                                  value={`fork:${structure.startLine}`}
+                                  key={`fork:${structure.startLine}`}
+                                >
+                                  {`fork ${structure.startLine + 1}行目：${structure.branches.length}枝`}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          {selectedWhileStructure && (
+                            <div className="control-editor-card">
+                              <label className="structure-field">
+                                <span>while条件</span>
+                                <input
+                                  value={whileConditionDraft}
+                                  onChange={(event) =>
+                                    setWhileConditionDraft(event.target.value)
+                                  }
+                                />
+                              </label>
+                              <div className="structure-two-columns">
+                                <label className="structure-field">
+                                  <span>継続ラベル</span>
+                                  <input
+                                    value={whileYesLabelDraft}
+                                    onChange={(event) =>
+                                      setWhileYesLabelDraft(event.target.value)
+                                    }
+                                  />
+                                </label>
+                                <label className="structure-field">
+                                  <span>終了ラベル</span>
+                                  <input
+                                    value={whileNoLabelDraft}
+                                    onChange={(event) =>
+                                      setWhileNoLabelDraft(event.target.value)
+                                    }
+                                  />
+                                </label>
+                              </div>
+                              <button
+                                type="button"
+                                className="structure-primary-action"
+                                onClick={applyWhileStructureEdit}
+                              >
+                                whileへ反映
+                              </button>
+                            </div>
+                          )}
+
+                          {selectedForkStructure && (
+                            <div className="control-editor-card">
+                              <div className="fork-branch-list">
+                                {selectedForkStructure.branches.map((branch, index) => (
+                                  <button
+                                    type="button"
+                                    className={selectedForkBranch === index ? "is-active" : ""}
+                                    onClick={() => setSelectedForkBranch(index)}
+                                    key={index}
+                                  >
+                                    <b>枝 {index + 1}</b>
+                                    <span>
+                                      {normalizeActivityLabel(
+                                        branch.lines.find((line) => line.includes(":")) ??
+                                          "処理なし",
+                                      )}
+                                    </span>
+                                  </button>
+                                ))}
+                              </div>
+                              <div className="fork-actions">
+                                <button
+                                  type="button"
+                                  onClick={() => moveForkBranch(-1)}
+                                  disabled={selectedForkBranch <= 0}
+                                >
+                                  <ArrowUp size={15} /> 前の枝へ
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => moveForkBranch(1)}
+                                  disabled={
+                                    selectedForkBranch >=
+                                    selectedForkStructure.branches.length - 1
+                                  }
+                                >
+                                  <ArrowDown size={15} /> 次の枝へ
+                                </button>
+                                <button type="button" onClick={addForkBranch}>
+                                  <PlusCircle size={15} /> 枝を追加
+                                </button>
+                                <button
+                                  type="button"
+                                  className="is-danger"
+                                  onClick={deleteForkBranch}
+                                  disabled={selectedForkStructure.branches.length <= 2}
+                                >
+                                  <Trash2 size={15} /> 枝を削除
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <p className="structure-empty">
+                          編集できる while または fork 構造がありません。
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
               </section>
