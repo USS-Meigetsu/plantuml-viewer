@@ -605,8 +605,38 @@ kbd {
   border-radius: 7px;
   background: rgba(37, 99, 235, 0.035);
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5) inset;
-  cursor: pointer;
+  cursor: grab;
   pointer-events: auto;
+  touch-action: none;
+}
+
+.activity-hit-target:active {
+  cursor: grabbing;
+}
+
+.activity-hit-target.is-dragging {
+  border-style: dashed;
+  opacity: 0.38;
+}
+
+.activity-hit-target.drop-before::before,
+.activity-hit-target.drop-after::after {
+  position: absolute;
+  right: -5px;
+  left: -5px;
+  height: 4px;
+  border-radius: 999px;
+  background: #ef7d2d;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9);
+  content: "";
+}
+
+.activity-hit-target.drop-before::before {
+  top: -7px;
+}
+
+.activity-hit-target.drop-after::after {
+  bottom: -7px;
 }
 
 .activity-hit-target:hover,

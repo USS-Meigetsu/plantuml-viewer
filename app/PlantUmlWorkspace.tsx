@@ -161,6 +161,7 @@ type ActivityShape = {
   width: number;
   height: number;
 };
+type ActivityDropPosition = "before" | "after";
 let enginePromise: Promise<EngineModule> | null = null;
 let renderQueue: Promise<void> = Promise.resolve();
 
@@ -614,6 +615,42 @@ function replaceSourceLines(
   return lines.join("\n");
 }
 
+function moveActivityOnce(source: string, index: number, direction: -1 | 1) {
+  const activities = parseEditableActivities(source);
+  const selected = activities[index];
+  if (!selected || !canMoveActivity(source, activities, index, direction)) {
+    return null;
+  }
+  const other = activities[index + direction];
+  const first = direction === -1 ? other : selected;
+  const second = direction === -1 ? selected : other;
+  const ordered = direction === -1 ? [selected, other] : [other, selected];
+  const directives = getSwimlaneDirectives(source);
+  const originalEndingLane = second.lane;
+  const replacement: string[] = [];
+  let activeLane = "";
+
+  for (const activity of ordered) {
+    if (activity.lane !== activeLane) {
+      replacement.push(
+        `${activity.indent}${directives.get(activity.lane) ?? `|${activity.lane}|`}`,
+      );
+      activeLane = activity.lane;
+    }
+    replacement.push(...activity.rawLines);
+  }
+  if (activeLane !== originalEndingLane) {
+    replacement.push(
+      `${second.indent}${directives.get(originalEndingLane) ?? `|${originalEndingLane}|`}`,
+    );
+  }
+
+  return {
+    source: replaceSourceLines(source, first.startLine, second.endLine, replacement),
+    index: index + direction,
+  };
+}
+
 function readSvgNumber(element: Element, attribute: string) {
   const value = Number.parseFloat(element.getAttribute(attribute) ?? "");
   return Number.isFinite(value) ? value : null;
@@ -795,6 +832,11 @@ export default function PlantUmlWorkspace() {
   const [selectedActivityKey, setSelectedActivityKey] = useState("");
   const [activityLabelDraft, setActivityLabelDraft] = useState("");
   const [editMessage, setEditMessage] = useState("");
+  const [draggedActivityKey, setDraggedActivityKey] = useState("");
+  const [activityDropTarget, setActivityDropTarget] = useState<{
+    key: string;
+    position: ActivityDropPosition;
+  } | null>(null);
   const [editHistory, setEditHistory] = useState<{
     past: string[];
     future: string[];
@@ -842,6 +884,18 @@ export default function PlantUmlWorkspace() {
     x: number;
     y: number;
   } | null>(null);
+  const activityPointerDragRef = useRef<{
+    pointerId: number;
+    activityKey: string;
+    startX: number;
+    startY: number;
+    active: boolean;
+  } | null>(null);
+  const activityDropTargetRef = useRef<{
+    key: string;
+    position: ActivityDropPosition;
+  } | null>(null);
+  const suppressActivityClickRef = useRef(false);
   const lines = useMemo(() => source.split("\n"), [source]);
   const editableActivities = useMemo(
     () => parseEditableActivities(source),
@@ -1145,10 +1199,22 @@ export default function PlantUmlWorkspace() {
     void renderDiagram(nextLimit);
   };
 
+  const selectActivityAtIndex = (nextSource: string, preferredIndex: number) => {
+    const nextActivities = parseEditableActivities(nextSource);
+    if (!nextActivities.length || preferredIndex < 0) {
+      setSelectedActivityKey("");
+      setActivityLabelDraft("");
+      return;
+    }
+    const activity = nextActivities[clamp(preferredIndex, 0, nextActivities.length - 1)];
+    setSelectedActivityKey(activity.key);
+    setActivityLabelDraft(activity.label);
+  };
+
   const applyVisualEdit = (
     nextSource: string,
     message: string,
-    nextSelection = "",
+    nextSelectionIndex = selectedActivityIndex,
   ) => {
     if (nextSource === source) return;
     setEditHistory((current) => ({
@@ -1156,7 +1222,7 @@ export default function PlantUmlWorkspace() {
       future: [],
     }));
     setSource(nextSource);
-    setSelectedActivityKey(nextSelection);
+    selectActivityAtIndex(nextSource, nextSelectionIndex);
     setEditMessage(message);
     setStatusMessage(`${message}。再描画しています…`);
     void renderDiagram(undefined, nextSource);
@@ -1170,7 +1236,7 @@ export default function PlantUmlWorkspace() {
       future: [...editHistory.future, source],
     });
     setSource(previous);
-    setSelectedActivityKey("");
+    selectActivityAtIndex(previous, selectedActivityIndex);
     setEditMessage("直前の編集を元に戻しました");
     void renderDiagram(undefined, previous);
   };
@@ -1183,7 +1249,7 @@ export default function PlantUmlWorkspace() {
       future: editHistory.future.slice(0, -1),
     });
     setSource(next);
-    setSelectedActivityKey("");
+    selectActivityAtIndex(next, selectedActivityIndex);
     setEditMessage("編集をやり直しました");
     void renderDiagram(undefined, next);
   };
@@ -1238,6 +1304,7 @@ export default function PlantUmlWorkspace() {
       position === "before"
         ? "選択した箱の前に追加しました"
         : "選択した箱の後に追加しました",
+      position === "before" ? selectedActivityIndex + 1 : selectedActivityIndex,
     );
   };
 
@@ -1288,42 +1355,139 @@ export default function PlantUmlWorkspace() {
   };
 
   const moveSelectedActivity = (direction: -1 | 1) => {
-    if (
-      !selectedActivity ||
-      selectedActivityIndex < 0 ||
-      !canMoveActivity(source, editableActivities, selectedActivityIndex, direction)
-    ) {
+    if (!selectedActivity || selectedActivityIndex < 0) return;
+    const moved = moveActivityOnce(source, selectedActivityIndex, direction);
+    if (!moved) {
       setEditMessage("分岐・ループの境界を越える移動はできません");
       return;
     }
-    const other = editableActivities[selectedActivityIndex + direction];
-    const first = direction === -1 ? other : selectedActivity;
-    const second = direction === -1 ? selectedActivity : other;
-    const ordered = direction === -1
-      ? [selectedActivity, other]
-      : [other, selectedActivity];
-    const directives = getSwimlaneDirectives(source);
-    const originalEndingLane = second.lane;
-    const replacement: string[] = [];
-    let activeLane = "";
-    for (const activity of ordered) {
-      if (activity.lane !== activeLane) {
-        replacement.push(
-          `${activity.indent}${directives.get(activity.lane) ?? `|${activity.lane}|`}`,
+    applyVisualEdit(
+      moved.source,
+      direction === -1 ? "箱を一つ前へ移動しました" : "箱を一つ後ろへ移動しました",
+      moved.index,
+    );
+  };
+
+  const clearActivityDrag = () => {
+    activityPointerDragRef.current = null;
+    activityDropTargetRef.current = null;
+    setDraggedActivityKey("");
+    setActivityDropTarget(null);
+  };
+
+  const reorderActivityByDrop = (
+    sourceKey: string,
+    targetKey: string,
+    position: ActivityDropPosition,
+  ) => {
+    const fromIndex = editableActivities.findIndex(
+      (activity) => activity.key === sourceKey,
+    );
+    const targetIndex = editableActivities.findIndex(
+      (activity) => activity.key === targetKey,
+    );
+    if (fromIndex < 0 || targetIndex < 0 || fromIndex === targetIndex) return;
+
+    let desiredIndex = targetIndex + (position === "after" ? 1 : 0);
+    if (fromIndex < desiredIndex) desiredIndex -= 1;
+    desiredIndex = clamp(desiredIndex, 0, editableActivities.length - 1);
+    if (desiredIndex === fromIndex) return;
+
+    let nextSource = source;
+    let currentIndex = fromIndex;
+    const direction: -1 | 1 = desiredIndex < fromIndex ? -1 : 1;
+    while (currentIndex !== desiredIndex) {
+      const moved = moveActivityOnce(nextSource, currentIndex, direction);
+      if (!moved) {
+        setEditMessage(
+          "分岐・ループの境界を越える位置には移動できません",
         );
-        activeLane = activity.lane;
+        return;
       }
-      replacement.push(...activity.rawLines);
-    }
-    if (activeLane !== originalEndingLane) {
-      replacement.push(
-        `${second.indent}${directives.get(originalEndingLane) ?? `|${originalEndingLane}|`}`,
-      );
+      nextSource = moved.source;
+      currentIndex = moved.index;
     }
     applyVisualEdit(
-      replaceSourceLines(source, first.startLine, second.endLine, replacement),
-      direction === -1 ? "箱を一つ前へ移動しました" : "箱を一つ後ろへ移動しました",
+      nextSource,
+      "ドラッグした位置へ箱を移動しました",
+      currentIndex,
     );
+  };
+
+  const getActivityDropTargetAtPoint = (clientX: number, clientY: number) => {
+    const element = document
+      .elementFromPoint(clientX, clientY)
+      ?.closest<HTMLButtonElement>(".activity-hit-target");
+    const key = element?.dataset.activityKey;
+    const drag = activityPointerDragRef.current;
+    if (!element || !key || !drag || key === drag.activityKey) return null;
+    const rect = element.getBoundingClientRect();
+    const position: ActivityDropPosition =
+      clientY < rect.top + rect.height / 2 ? "before" : "after";
+    return { key, position };
+  };
+
+  const handleActivityPointerDown = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    activityKey: string,
+  ) => {
+    event.stopPropagation();
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    activityPointerDragRef.current = {
+      pointerId: event.pointerId,
+      activityKey,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+    };
+    selectEditableActivity(activityKey);
+  };
+
+  const handleActivityPointerMove = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    const drag = activityPointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const distance = Math.hypot(
+      event.clientX - drag.startX,
+      event.clientY - drag.startY,
+    );
+    if (!drag.active && distance < 6) return;
+    if (!drag.active) {
+      drag.active = true;
+      suppressActivityClickRef.current = true;
+      setDraggedActivityKey(drag.activityKey);
+    }
+    event.preventDefault();
+    const target = getActivityDropTargetAtPoint(event.clientX, event.clientY);
+    activityDropTargetRef.current = target;
+    setActivityDropTarget(target);
+  };
+
+  const handleActivityPointerEnd = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    const drag = activityPointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const target =
+      getActivityDropTargetAtPoint(event.clientX, event.clientY) ??
+      activityDropTargetRef.current;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    clearActivityDrag();
+    if (drag.active && target) {
+      reorderActivityByDrop(drag.activityKey, target.key, target.position);
+    }
+  };
+
+  const handleActivityClick = (activityKey: string) => {
+    if (suppressActivityClickRef.current) {
+      suppressActivityClickRef.current = false;
+      return;
+    }
+    selectEditableActivity(activityKey);
   };
 
   useEffect(() => {
@@ -2086,7 +2250,7 @@ export default function PlantUmlWorkspace() {
                 <div className="activity-editor-heading">
                   <div>
                     <strong>箱を編集</strong>
-                    <span>図の箱か一覧から選択</span>
+                    <span>図の箱を選択・ドラッグして並べ替え</span>
                   </div>
                   <button
                     type="button"
@@ -2216,7 +2380,7 @@ export default function PlantUmlWorkspace() {
                   </p>
                 )}
                 <p className="activity-editor-note">
-                  分岐・ループの境界を越える並べ替えは、コード破損防止のため制限しています。
+                  箱を別の箱の上半分・下半分へドロップすると、その前・後へ移動します。分岐・ループの境界は越えられません。
                 </p>
               </aside>
             )}
@@ -2351,7 +2515,7 @@ export default function PlantUmlWorkspace() {
                   activityShapes.map((shape) => (
                     <button
                       type="button"
-                      className={`activity-hit-target ${selectedActivityKey === shape.activityKey ? "is-selected" : ""}`}
+                      className={`activity-hit-target ${selectedActivityKey === shape.activityKey ? "is-selected" : ""} ${draggedActivityKey === shape.activityKey ? "is-dragging" : ""} ${activityDropTarget?.key === shape.activityKey ? `drop-${activityDropTarget.position}` : ""}`}
                       style={{
                         left: shape.x,
                         top: shape.y,
@@ -2360,9 +2524,16 @@ export default function PlantUmlWorkspace() {
                       }}
                       key={`${shape.activityKey}-${shape.x}-${shape.y}`}
                       aria-label="この箱を編集"
-                      title="クリックして編集"
-                      onPointerDown={(event) => event.stopPropagation()}
-                      onClick={() => selectEditableActivity(shape.activityKey)}
+                      aria-grabbed={draggedActivityKey === shape.activityKey}
+                      data-activity-key={shape.activityKey}
+                      title="クリックして編集・ドラッグして順番を変更"
+                      onPointerDown={(event) =>
+                        handleActivityPointerDown(event, shape.activityKey)
+                      }
+                      onPointerMove={handleActivityPointerMove}
+                      onPointerUp={handleActivityPointerEnd}
+                      onPointerCancel={handleActivityPointerEnd}
+                      onClick={() => handleActivityClick(shape.activityKey)}
                     />
                   ))}
               </div>
