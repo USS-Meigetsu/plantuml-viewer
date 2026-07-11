@@ -1,12 +1,15 @@
 "use client";
 
 import {
+  ArrowDown,
+  ArrowUp,
   Braces,
   Check,
   ChevronLeft,
   CircleAlert,
   Code2,
   Copy,
+  CopyPlus,
   Download,
   Expand,
   FileCode2,
@@ -16,11 +19,17 @@ import {
   Maximize2,
   Minus,
   MousePointer2,
+  PencilLine,
   Play,
   Plus,
+  PlusCircle,
+  Redo2,
   RotateCcw,
   ShieldCheck,
   Sparkles,
+  Trash2,
+  Undo2,
+  X,
 } from "lucide-react";
 import {
   ClipboardEvent as ReactClipboardEvent,
@@ -134,6 +143,23 @@ type Swimlane = {
 type NormalizedSource = {
   source: string;
   strippedMarkdownFence: boolean;
+};
+type EditableActivity = {
+  key: string;
+  startLine: number;
+  endLine: number;
+  label: string;
+  lane: string;
+  indent: string;
+  rawLines: string[];
+  context: string;
+};
+type ActivityShape = {
+  activityKey: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 };
 let enginePromise: Promise<EngineModule> | null = null;
 let renderQueue: Promise<void> = Promise.resolve();
@@ -370,6 +396,224 @@ function getSourceSwimlaneNames(source: string) {
   return names;
 }
 
+function parseSwimlaneLine(line: string) {
+  const match = line.trim().match(/^\|(.+)\|$/);
+  if (!match) return null;
+  const parts = match[1].split("|").map((part) => part.trim());
+  const rawName = parts[0]?.startsWith("#")
+    ? parts.slice(1).join("|")
+    : parts.join("|");
+  const name = rawName.trim().replace(/^"|"$/g, "");
+  return name ? { name, directive: line.trim() } : null;
+}
+
+function getSwimlaneDirectives(source: string) {
+  const directives = new Map<string, string>();
+  for (const line of source.split(/\r\n|\r|\n/)) {
+    const lane = parseSwimlaneLine(line);
+    if (lane && !directives.has(lane.name)) {
+      directives.set(lane.name, lane.directive);
+    }
+  }
+  return directives;
+}
+
+function normalizeActivityLabel(label: string) {
+  return label
+    .replace(/\\n/g, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/(?:\*\*|__|\/\/|~~|"")/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseEditableActivities(source: string): EditableActivity[] {
+  const lines = source.split(/\r\n|\r|\n/);
+  const activities: EditableActivity[] = [];
+  const contextStack: string[] = [];
+  let currentLane = "主体未指定";
+
+  const updateContext = (trimmed: string, lineIndex: number) => {
+    if (/^(?:end\s*fork|endfork|endif|endwhile|endswitch)\b/i.test(trimmed)) {
+      contextStack.pop();
+      return;
+    }
+    if (/^repeat\s+while\b/i.test(trimmed)) {
+      contextStack.pop();
+      return;
+    }
+    if (/^(?:else|elseif|fork\s+again|case)\b/i.test(trimmed)) {
+      if (contextStack.length) {
+        const root = contextStack[contextStack.length - 1].split(":")[0];
+        contextStack[contextStack.length - 1] = `${root}:${lineIndex}`;
+      }
+      return;
+    }
+    if (/^(?:if\s*\(|while\s*\(|repeat\b|fork\b|switch\s*\()/i.test(trimmed)) {
+      contextStack.push(`${lineIndex}:${lineIndex}`);
+    }
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    const lane = parseSwimlaneLine(line);
+    if (lane) {
+      currentLane = lane.name;
+      continue;
+    }
+
+    updateContext(trimmed, index);
+    const start = line.match(/^(\s*):(.*)$/);
+    if (!start) continue;
+
+    const rawLines = [line];
+    let endLine = index;
+    while (!rawLines.join("\n").includes(";") && endLine + 1 < lines.length) {
+      endLine += 1;
+      rawLines.push(lines[endLine]);
+    }
+    const raw = rawLines.join("\n");
+    const colonIndex = raw.indexOf(":");
+    const semicolonIndex = raw.indexOf(";", colonIndex + 1);
+    if (semicolonIndex < 0) continue;
+    const label = raw
+      .slice(colonIndex + 1, semicolonIndex)
+      .replace(/\\n/g, "\n")
+      .replace(/\n\s*/g, "\n")
+      .trim();
+    if (!label) continue;
+
+    activities.push({
+      key: `${index}:${endLine}`,
+      startLine: index,
+      endLine,
+      label,
+      lane: currentLane,
+      indent: start[1],
+      rawLines,
+      context: contextStack.join(">"),
+    });
+    index = endLine;
+  }
+  return activities;
+}
+
+function getSvgTextPosition(element: Element) {
+  const firstTspan = element.querySelector("tspan");
+  return {
+    x:
+      readSvgNumber(element, "x") ??
+      (firstTspan ? readSvgNumber(firstTspan, "x") : null),
+    y:
+      readSvgNumber(element, "y") ??
+      (firstTspan ? readSvgNumber(firstTspan, "y") : null),
+  };
+}
+
+function extractActivityShapes(svg: string, source: string): ActivityShape[] {
+  const activities = parseEditableActivities(source);
+  if (!activities.length) return [];
+  const document = new DOMParser().parseFromString(svg, "image/svg+xml");
+  if (document.querySelector("parsererror")) return [];
+  const root = document.documentElement;
+  const viewBox = root.getAttribute("viewBox")?.split(/[ ,]+/).map(Number);
+  const minX = viewBox?.length === 4 && Number.isFinite(viewBox[0]) ? viewBox[0] : 0;
+  const minY = viewBox?.length === 4 && Number.isFinite(viewBox[1]) ? viewBox[1] : 0;
+
+  const rectangles = Array.from(document.querySelectorAll("rect"))
+    .map((rect) => ({
+      x: readSvgNumber(rect, "x"),
+      y: readSvgNumber(rect, "y"),
+      width: readSvgNumber(rect, "width"),
+      height: readSvgNumber(rect, "height"),
+    }))
+    .filter(
+      (rect) =>
+        rect.x !== null &&
+        rect.y !== null &&
+        rect.width !== null &&
+        rect.height !== null &&
+        rect.width >= 24 &&
+        rect.height >= 14,
+    );
+  const texts = Array.from(document.querySelectorAll("text"))
+    .map((element, index) => {
+      const position = getSvgTextPosition(element);
+      return {
+        index,
+        label: normalizeActivityLabel(element.textContent ?? ""),
+        x: position.x,
+        y: position.y,
+      };
+    })
+    .filter((text) => text.label && text.x !== null && text.y !== null);
+  const usedTexts = new Set<number>();
+  const shapes: ActivityShape[] = [];
+
+  for (const activity of activities) {
+    const wanted = normalizeActivityLabel(activity.label);
+    const text = texts.find(
+      (candidate) =>
+        !usedTexts.has(candidate.index) &&
+        (candidate.label === wanted ||
+          candidate.label.replace(/\s/g, "") === wanted.replace(/\s/g, "")),
+    );
+    if (!text || text.x === null || text.y === null) continue;
+    const containing = rectangles
+      .filter(
+        (rect) =>
+          rect.x !== null &&
+          rect.y !== null &&
+          rect.width !== null &&
+          rect.height !== null &&
+          text.x! >= rect.x - 3 &&
+          text.x! <= rect.x + rect.width + 3 &&
+          text.y! >= rect.y - 3 &&
+          text.y! <= rect.y + rect.height + 8,
+      )
+      .sort((a, b) => a.width! * a.height! - b.width! * b.height!)[0];
+    if (!containing) continue;
+    usedTexts.add(text.index);
+    shapes.push({
+      activityKey: activity.key,
+      x: containing.x! - minX,
+      y: containing.y! - minY,
+      width: containing.width!,
+      height: containing.height!,
+    });
+  }
+  return shapes;
+}
+
+function canMoveActivity(
+  source: string,
+  activities: EditableActivity[],
+  index: number,
+  direction: -1 | 1,
+) {
+  const other = activities[index + direction];
+  const current = activities[index];
+  if (!current || !other || current.context !== other.context) return false;
+  const lines = source.split(/\r\n|\r|\n/);
+  const first = direction === -1 ? other : current;
+  const second = direction === -1 ? current : other;
+  return lines
+    .slice(first.endLine + 1, second.startLine)
+    .every((line) => !line.trim() || Boolean(parseSwimlaneLine(line)));
+}
+
+function replaceSourceLines(
+  source: string,
+  startLine: number,
+  endLine: number,
+  replacement: string[],
+) {
+  const lines = source.split(/\r\n|\r|\n/);
+  lines.splice(startLine, endLine - startLine + 1, ...replacement);
+  return lines.join("\n");
+}
+
 function readSvgNumber(element: Element, attribute: string) {
   const value = Number.parseFloat(element.getAttribute(attribute) ?? "");
   return Number.isFinite(value) ? value : null;
@@ -546,6 +790,15 @@ export default function PlantUmlWorkspace() {
   const [limitInputError, setLimitInputError] = useState("");
   const [diagramType, setDiagramType] = useState("");
   const [swimlanes, setSwimlanes] = useState<Swimlane[]>([]);
+  const [activityShapes, setActivityShapes] = useState<ActivityShape[]>([]);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [selectedActivityKey, setSelectedActivityKey] = useState("");
+  const [activityLabelDraft, setActivityLabelDraft] = useState("");
+  const [editMessage, setEditMessage] = useState("");
+  const [editHistory, setEditHistory] = useState<{
+    past: string[];
+    future: string[];
+  }>({ past: [], future: [] });
   const [editorPercent, setEditorPercent] = useState(35);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [toolbarPosition, setToolbarPosition] = useState<Point | null>(null);
@@ -589,8 +842,27 @@ export default function PlantUmlWorkspace() {
     x: number;
     y: number;
   } | null>(null);
-
   const lines = useMemo(() => source.split("\n"), [source]);
+  const editableActivities = useMemo(
+    () => parseEditableActivities(source),
+    [source],
+  );
+  const swimlaneNames = useMemo(() => getSourceSwimlaneNames(source), [source]);
+  const selectedActivity = useMemo(
+    () =>
+      editableActivities.find((activity) => activity.key === selectedActivityKey) ??
+      null,
+    [editableActivities, selectedActivityKey],
+  );
+  const selectedActivityIndex = selectedActivity
+    ? editableActivities.findIndex((activity) => activity.key === selectedActivity.key)
+    : -1;
+  const canMoveSelectedUp =
+    selectedActivityIndex >= 0 &&
+    canMoveActivity(source, editableActivities, selectedActivityIndex, -1);
+  const canMoveSelectedDown =
+    selectedActivityIndex >= 0 &&
+    canMoveActivity(source, editableActivities, selectedActivityIndex, 1);
   const sourceIsDirty = Boolean(svg && source.trim() !== renderedSource.trim());
   const laneGuideSegments = useMemo(() => {
     if (!swimlanes.length || !canvasSize.width) return [];
@@ -725,9 +997,13 @@ export default function PlantUmlWorkspace() {
     [svg],
   );
 
-  const renderDiagram = useCallback(async (limitOverride?: number) => {
+  const renderDiagram = useCallback(async (
+    limitOverride?: number,
+    sourceOverride?: string,
+  ) => {
     const activeLimit = limitOverride ?? renderLimit;
-    const normalized = normalizeSource(source);
+    const activeSource = sourceOverride ?? source;
+    const normalized = normalizeSource(activeSource);
     if (!normalized.source) {
       setRenderState("error");
       setStatusMessage("PlantUMLコードを貼り付けてください。");
@@ -737,6 +1013,7 @@ export default function PlantUmlWorkspace() {
       setSvgUrl("");
       setDiagramType("");
       setSwimlanes([]);
+      setActivityShapes([]);
       setLimitError(null);
       textareaRef.current?.focus();
       return;
@@ -744,6 +1021,7 @@ export default function PlantUmlWorkspace() {
 
     const requestId = ++renderRequestRef.current;
     setRenderState("loading");
+    setActivityShapes([]);
     setStatusMessage("描画エンジンを準備しています…");
     setErrorDetails("");
     setErrorCopied(false);
@@ -770,6 +1048,7 @@ export default function PlantUmlWorkspace() {
         setSvgUrl("");
         setDiagramType("");
         setSwimlanes([]);
+        setActivityShapes([]);
         setRenderedSource("");
         setRenderState("error");
         setStatusMessage("描画できませんでした。エラー内容を確認してください。");
@@ -781,9 +1060,10 @@ export default function PlantUmlWorkspace() {
       const size = getSvgSize(safeSvg);
       setSvg(safeSvg);
       setDiagramSize(size);
-      setRenderedSource(source);
+      setRenderedSource(activeSource);
       setDiagramType(detectDiagramType(normalized.source));
       setSwimlanes(extractSwimlanes(safeSvg, normalized.source));
+      setActivityShapes(extractActivityShapes(safeSvg, normalized.source));
       setRenderState("success");
       setStatusMessage(
         normalized.strippedMarkdownFence
@@ -805,6 +1085,7 @@ export default function PlantUmlWorkspace() {
       setSvgUrl("");
       setDiagramType("");
       setSwimlanes([]);
+      setActivityShapes([]);
       setRenderedSource("");
       setRenderState("error");
       setStatusMessage("描画できませんでした。エラー内容を確認してください。");
@@ -862,6 +1143,187 @@ export default function PlantUmlWorkspace() {
       // The new limit still applies to the current tab when storage is blocked.
     }
     void renderDiagram(nextLimit);
+  };
+
+  const applyVisualEdit = (
+    nextSource: string,
+    message: string,
+    nextSelection = "",
+  ) => {
+    if (nextSource === source) return;
+    setEditHistory((current) => ({
+      past: [...current.past.slice(-49), source],
+      future: [],
+    }));
+    setSource(nextSource);
+    setSelectedActivityKey(nextSelection);
+    setEditMessage(message);
+    setStatusMessage(`${message}。再描画しています…`);
+    void renderDiagram(undefined, nextSource);
+  };
+
+  const undoVisualEdit = () => {
+    const previous = editHistory.past.at(-1);
+    if (previous === undefined) return;
+    setEditHistory({
+      past: editHistory.past.slice(0, -1),
+      future: [...editHistory.future, source],
+    });
+    setSource(previous);
+    setSelectedActivityKey("");
+    setEditMessage("直前の編集を元に戻しました");
+    void renderDiagram(undefined, previous);
+  };
+
+  const redoVisualEdit = () => {
+    const next = editHistory.future.at(-1);
+    if (next === undefined) return;
+    setEditHistory({
+      past: [...editHistory.past, source],
+      future: editHistory.future.slice(0, -1),
+    });
+    setSource(next);
+    setSelectedActivityKey("");
+    setEditMessage("編集をやり直しました");
+    void renderDiagram(undefined, next);
+  };
+
+  const selectEditableActivity = (key: string) => {
+    const activity = editableActivities.find((candidate) => candidate.key === key);
+    setSelectedActivityKey(key);
+    setActivityLabelDraft(activity?.label ?? "");
+    setEditMessage("");
+  };
+
+  const updateSelectedActivityLabel = () => {
+    if (!selectedActivity) return;
+    const trimmed = activityLabelDraft.trim();
+    if (!trimmed) {
+      setEditMessage("箱の文章を入力してください");
+      return;
+    }
+    if (trimmed.includes(";")) {
+      setEditMessage("箱の文章には半角セミコロン（;）を使用できません");
+      return;
+    }
+    const raw = selectedActivity.rawLines.join("\n");
+    const colonIndex = raw.indexOf(":");
+    const semicolonIndex = raw.indexOf(";", colonIndex + 1);
+    const suffix = raw.slice(semicolonIndex + 1).trim();
+    const label = trimmed.replace(/\r?\n/g, "\\n");
+    const replacement = [
+      `${selectedActivity.indent}:${label};${suffix ? ` ${suffix}` : ""}`,
+    ];
+    applyVisualEdit(
+      replaceSourceLines(
+        source,
+        selectedActivity.startLine,
+        selectedActivity.endLine,
+        replacement,
+      ),
+      "箱の文章を変更しました",
+    );
+  };
+
+  const addActivityNearSelected = (position: "before" | "after") => {
+    if (!selectedActivity) return;
+    const insertAt =
+      position === "before"
+        ? selectedActivity.startLine
+        : selectedActivity.endLine + 1;
+    const lines = source.split(/\r\n|\r|\n/);
+    lines.splice(insertAt, 0, `${selectedActivity.indent}:新しい処理;`);
+    applyVisualEdit(
+      lines.join("\n"),
+      position === "before"
+        ? "選択した箱の前に追加しました"
+        : "選択した箱の後に追加しました",
+    );
+  };
+
+  const duplicateSelectedActivity = () => {
+    if (!selectedActivity) return;
+    const lines = source.split(/\r\n|\r|\n/);
+    lines.splice(
+      selectedActivity.endLine + 1,
+      0,
+      ...selectedActivity.rawLines,
+    );
+    applyVisualEdit(lines.join("\n"), "箱を複製しました");
+  };
+
+  const deleteSelectedActivity = () => {
+    if (!selectedActivity) return;
+    applyVisualEdit(
+      replaceSourceLines(
+        source,
+        selectedActivity.startLine,
+        selectedActivity.endLine,
+        [],
+      ),
+      "箱を削除しました",
+    );
+  };
+
+  const changeSelectedActivityLane = (nextLane: string) => {
+    if (!selectedActivity || !nextLane || nextLane === selectedActivity.lane) return;
+    const directives = getSwimlaneDirectives(source);
+    const targetDirective = directives.get(nextLane) ?? `|${nextLane}|`;
+    const restoreDirective =
+      directives.get(selectedActivity.lane) ?? `|${selectedActivity.lane}|`;
+    const replacement = [
+      `${selectedActivity.indent}${targetDirective}`,
+      ...selectedActivity.rawLines,
+      `${selectedActivity.indent}${restoreDirective}`,
+    ];
+    applyVisualEdit(
+      replaceSourceLines(
+        source,
+        selectedActivity.startLine,
+        selectedActivity.endLine,
+        replacement,
+      ),
+      `主体を「${nextLane}」へ変更しました`,
+    );
+  };
+
+  const moveSelectedActivity = (direction: -1 | 1) => {
+    if (
+      !selectedActivity ||
+      selectedActivityIndex < 0 ||
+      !canMoveActivity(source, editableActivities, selectedActivityIndex, direction)
+    ) {
+      setEditMessage("分岐・ループの境界を越える移動はできません");
+      return;
+    }
+    const other = editableActivities[selectedActivityIndex + direction];
+    const first = direction === -1 ? other : selectedActivity;
+    const second = direction === -1 ? selectedActivity : other;
+    const ordered = direction === -1
+      ? [selectedActivity, other]
+      : [other, selectedActivity];
+    const directives = getSwimlaneDirectives(source);
+    const originalEndingLane = second.lane;
+    const replacement: string[] = [];
+    let activeLane = "";
+    for (const activity of ordered) {
+      if (activity.lane !== activeLane) {
+        replacement.push(
+          `${activity.indent}${directives.get(activity.lane) ?? `|${activity.lane}|`}`,
+        );
+        activeLane = activity.lane;
+      }
+      replacement.push(...activity.rawLines);
+    }
+    if (activeLane !== originalEndingLane) {
+      replacement.push(
+        `${second.indent}${directives.get(originalEndingLane) ?? `|${originalEndingLane}|`}`,
+      );
+    }
+    applyVisualEdit(
+      replaceSourceLines(source, first.startLine, second.endLine, replacement),
+      direction === -1 ? "箱を一つ前へ移動しました" : "箱を一つ後ろへ移動しました",
+    );
   };
 
   useEffect(() => {
@@ -958,6 +1420,13 @@ export default function PlantUmlWorkspace() {
     }
   };
 
+  const handleManualSourceChange = (nextSource: string) => {
+    setSource(nextSource);
+    setEditHistory({ past: [], future: [] });
+    setSelectedActivityKey("");
+    setEditMessage("");
+  };
+
   const handleSourcePaste = (
     event: ReactClipboardEvent<HTMLTextAreaElement>,
   ) => {
@@ -971,6 +1440,9 @@ export default function PlantUmlWorkspace() {
     const end = textarea.selectionEnd;
     const nextSource = source.slice(0, start) + extracted + source.slice(end);
     setSource(nextSource);
+    setEditHistory({ past: [], future: [] });
+    setSelectedActivityKey("");
+    setEditMessage("");
     setRenderState("idle");
     setErrorDetails("");
     setErrorCopied(false);
@@ -1309,6 +1781,10 @@ export default function PlantUmlWorkspace() {
 
   const loadSample = () => {
     setSource(SAMPLE_SOURCE);
+    setEditHistory({ past: [], future: [] });
+    setSelectedActivityKey("");
+    setIsEditMode(false);
+    setEditMessage("");
     setRenderState("idle");
     setErrorDetails("");
     setErrorCopied(false);
@@ -1364,7 +1840,7 @@ export default function PlantUmlWorkspace() {
               ref={textareaRef}
               className="source-input"
               value={source}
-              onChange={(event) => setSource(event.target.value)}
+              onChange={(event) => handleManualSourceChange(event.target.value)}
               onPaste={handleSourcePaste}
               onScroll={handleEditorScroll}
               wrap="off"
@@ -1440,17 +1916,41 @@ export default function PlantUmlWorkspace() {
               <span>プレビュー</span>
               {diagramType && <span className="diagram-type">{diagramType}</span>}
             </div>
-            {!isEditorCollapsed && (
+            <div className="preview-actions">
               <button
-                className="collapse-editor-button"
+                className={`edit-mode-button ${isEditMode ? "is-active" : ""}`}
                 type="button"
-                onClick={() => setIsEditorCollapsed(true)}
-                aria-label="ソースエディタを隠して図を広く表示"
+                disabled={!svg || editableActivities.length === 0}
+                aria-pressed={isEditMode}
+                title={
+                  editableActivities.length
+                    ? "箱の文章・順番・主体を編集"
+                    : "標準的なアクティビティ図を描画すると利用できます"
+                }
+                onClick={() => {
+                  const next = !isEditMode;
+                  setIsEditMode(next);
+                  setEditMessage("");
+                  if (next && !selectedActivityKey) {
+                    selectEditableActivity(editableActivities[0]?.key ?? "");
+                  }
+                }}
               >
-                <ChevronLeft size={17} aria-hidden="true" />
-                図を広く
+                <PencilLine size={16} aria-hidden="true" />
+                {isEditMode ? "編集を終了" : "箱を編集"}
               </button>
-            )}
+              {!isEditorCollapsed && (
+                <button
+                  className="collapse-editor-button"
+                  type="button"
+                  onClick={() => setIsEditorCollapsed(true)}
+                  aria-label="ソースエディタを隠して図を広く表示"
+                >
+                  <ChevronLeft size={17} aria-hidden="true" />
+                  図を広く
+                </button>
+              )}
+            </div>
           </div>
 
           <div
@@ -1575,6 +2075,151 @@ export default function PlantUmlWorkspace() {
                 <span>SVG</span>
               </button>
             </div>
+
+            {isEditMode && (
+              <aside
+                className="activity-editor-panel"
+                aria-label="箱の編集パネル"
+                onPointerDown={(event) => event.stopPropagation()}
+                onWheel={(event) => event.stopPropagation()}
+              >
+                <div className="activity-editor-heading">
+                  <div>
+                    <strong>箱を編集</strong>
+                    <span>図の箱か一覧から選択</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="activity-editor-close"
+                    onClick={() => setIsEditMode(false)}
+                    aria-label="編集モードを終了"
+                  >
+                    <X size={17} />
+                  </button>
+                </div>
+
+                <div className="activity-history-buttons">
+                  <button
+                    type="button"
+                    onClick={undoVisualEdit}
+                    disabled={editHistory.past.length === 0}
+                  >
+                    <Undo2 size={15} /> 元に戻す
+                  </button>
+                  <button
+                    type="button"
+                    onClick={redoVisualEdit}
+                    disabled={editHistory.future.length === 0}
+                  >
+                    <Redo2 size={15} /> やり直す
+                  </button>
+                </div>
+
+                <label className="activity-field">
+                  <span>編集する箱</span>
+                  <select
+                    value={selectedActivityKey}
+                    onChange={(event) => selectEditableActivity(event.target.value)}
+                  >
+                    <option value="">箱を選択してください</option>
+                    {editableActivities.map((activity, index) => (
+                      <option value={activity.key} key={activity.key}>
+                        {`${index + 1}. [${activity.lane}] ${normalizeActivityLabel(activity.label)}`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {selectedActivity ? (
+                  <>
+                    <label className="activity-field">
+                      <span>箱の文章</span>
+                      <textarea
+                        value={activityLabelDraft}
+                        rows={3}
+                        onChange={(event) => setActivityLabelDraft(event.target.value)}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="activity-primary-action"
+                      onClick={updateSelectedActivityLabel}
+                    >
+                      <Check size={16} /> 文章を反映
+                    </button>
+
+                    <label className="activity-field">
+                      <span>主体</span>
+                      <select
+                        value={selectedActivity.lane}
+                        disabled={swimlaneNames.length < 2}
+                        onChange={(event) =>
+                          changeSelectedActivityLane(event.target.value)
+                        }
+                      >
+                        {swimlaneNames.map((lane) => (
+                          <option value={lane} key={lane}>
+                            {lane}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <div className="activity-action-grid">
+                      <button
+                        type="button"
+                        onClick={() => moveSelectedActivity(-1)}
+                        disabled={!canMoveSelectedUp}
+                        title="分岐やループの境界は越えられません"
+                      >
+                        <ArrowUp size={16} /> 一つ前へ
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => moveSelectedActivity(1)}
+                        disabled={!canMoveSelectedDown}
+                        title="分岐やループの境界は越えられません"
+                      >
+                        <ArrowDown size={16} /> 一つ後ろへ
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => addActivityNearSelected("before")}
+                      >
+                        <PlusCircle size={16} /> 前に追加
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => addActivityNearSelected("after")}
+                      >
+                        <PlusCircle size={16} /> 後に追加
+                      </button>
+                      <button type="button" onClick={duplicateSelectedActivity}>
+                        <CopyPlus size={16} /> 複製
+                      </button>
+                      <button
+                        type="button"
+                        className="activity-delete-action"
+                        onClick={deleteSelectedActivity}
+                      >
+                        <Trash2 size={16} /> 削除
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="activity-editor-empty">編集する箱を選択してください。</p>
+                )}
+
+                {editMessage && (
+                  <p className="activity-edit-message" role="status">
+                    {editMessage}
+                  </p>
+                )}
+                <p className="activity-editor-note">
+                  分岐・ループの境界を越える並べ替えは、コード破損防止のため制限しています。
+                </p>
+              </aside>
+            )}
 
             {laneGuideSegments.length > 0 && (
               <div
@@ -1702,6 +2347,24 @@ export default function PlantUmlWorkspace() {
                   alt="PlantUMLで生成した図"
                   draggable={false}
                 />
+                {isEditMode &&
+                  activityShapes.map((shape) => (
+                    <button
+                      type="button"
+                      className={`activity-hit-target ${selectedActivityKey === shape.activityKey ? "is-selected" : ""}`}
+                      style={{
+                        left: shape.x,
+                        top: shape.y,
+                        width: shape.width,
+                        height: shape.height,
+                      }}
+                      key={`${shape.activityKey}-${shape.x}-${shape.y}`}
+                      aria-label="この箱を編集"
+                      title="クリックして編集"
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={() => selectEditableActivity(shape.activityKey)}
+                    />
+                  ))}
               </div>
             ) : (
               <div className="empty-state">

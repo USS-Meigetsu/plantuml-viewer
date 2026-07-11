@@ -8,6 +8,7 @@ test("exports a standalone Cloudflare Pages site", async () => {
   const html = await readFile(new URL("out/index.html", projectRoot), "utf8");
 
   assert.match(html, /<title>PlantUML Viewer/);
+  assert.match(html, /箱を編集/);
   assert.match(html, /\/_next\/static\//);
   assert.doesNotMatch(html, /codex-preview/);
   assert.doesNotMatch(html, /chatgpt\.site/);
