@@ -162,6 +162,7 @@ type ActivityShape = {
   height: number;
 };
 type ActivityDropPosition = "before" | "after";
+type ActivityDragIntent = "reorder" | "lane";
 type SourceDiffLine = {
   type: "same" | "added" | "removed" | "skip";
   oldLine: number | null;
@@ -967,6 +968,12 @@ export default function PlantUmlWorkspace() {
     key: string;
     position: ActivityDropPosition;
   } | null>(null);
+  const [activityLaneTarget, setActivityLaneTarget] = useState("");
+  const [isNewActivityDragging, setIsNewActivityDragging] = useState(false);
+  const [newActivityDropTarget, setNewActivityDropTarget] = useState<{
+    key: string;
+    position: ActivityDropPosition;
+  } | null>(null);
   const [editHistory, setEditHistory] = useState<{
     past: string[];
     future: string[];
@@ -1020,8 +1027,20 @@ export default function PlantUmlWorkspace() {
     startX: number;
     startY: number;
     active: boolean;
+    intent: ActivityDragIntent | null;
   } | null>(null);
   const activityDropTargetRef = useRef<{
+    key: string;
+    position: ActivityDropPosition;
+  } | null>(null);
+  const activityLaneTargetRef = useRef("");
+  const newActivityPointerDragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    active: boolean;
+  } | null>(null);
+  const newActivityDropTargetRef = useRef<{
     key: string;
     position: ActivityDropPosition;
   } | null>(null);
@@ -1032,6 +1051,10 @@ export default function PlantUmlWorkspace() {
     [source],
   );
   const swimlaneNames = useMemo(() => getSourceSwimlaneNames(source), [source]);
+  const targetSwimlane = useMemo(
+    () => swimlanes.find((lane) => lane.name === activityLaneTarget) ?? null,
+    [activityLaneTarget, swimlanes],
+  );
   const selectedActivity = useMemo(
     () =>
       editableActivities.find((activity) => activity.key === selectedActivityKey) ??
@@ -1449,6 +1472,27 @@ export default function PlantUmlWorkspace() {
     );
   };
 
+  const addActivityAtDrop = (
+    targetKey: string,
+    position: ActivityDropPosition,
+  ) => {
+    const targetIndex = editableActivities.findIndex(
+      (activity) => activity.key === targetKey,
+    );
+    const target = editableActivities[targetIndex];
+    if (!target || targetIndex < 0) return;
+    const insertAt = position === "before" ? target.startLine : target.endLine + 1;
+    const nextLines = source.split(/\r\n|\r|\n/);
+    nextLines.splice(insertAt, 0, `${target.indent}:新しい処理;`);
+    applyVisualEdit(
+      nextLines.join("\n"),
+      position === "before"
+        ? "ドラッグした位置の前に箱を追加しました"
+        : "ドラッグした位置の後に箱を追加しました",
+      position === "before" ? targetIndex : targetIndex + 1,
+    );
+  };
+
   const duplicateSelectedActivity = () => {
     if (!selectedActivity) return;
     const lines = source.split(/\r\n|\r|\n/);
@@ -1473,26 +1517,36 @@ export default function PlantUmlWorkspace() {
     );
   };
 
-  const changeSelectedActivityLane = (nextLane: string) => {
-    if (!selectedActivity || !nextLane || nextLane === selectedActivity.lane) return;
+  const changeActivityLane = (activityKey: string, nextLane: string) => {
+    const activityIndex = editableActivities.findIndex(
+      (activity) => activity.key === activityKey,
+    );
+    const activity = editableActivities[activityIndex];
+    if (!activity || !nextLane || nextLane === activity.lane) return;
     const directives = getSwimlaneDirectives(source);
     const targetDirective = directives.get(nextLane) ?? `|${nextLane}|`;
     const restoreDirective =
-      directives.get(selectedActivity.lane) ?? `|${selectedActivity.lane}|`;
+      directives.get(activity.lane) ?? `|${activity.lane}|`;
     const replacement = [
-      `${selectedActivity.indent}${targetDirective}`,
-      ...selectedActivity.rawLines,
-      `${selectedActivity.indent}${restoreDirective}`,
+      `${activity.indent}${targetDirective}`,
+      ...activity.rawLines,
+      `${activity.indent}${restoreDirective}`,
     ];
     applyVisualEdit(
       replaceSourceLines(
         source,
-        selectedActivity.startLine,
-        selectedActivity.endLine,
+        activity.startLine,
+        activity.endLine,
         replacement,
       ),
       `主体を「${nextLane}」へ変更しました`,
+      activityIndex,
     );
+  };
+
+  const changeSelectedActivityLane = (nextLane: string) => {
+    if (!selectedActivity) return;
+    changeActivityLane(selectedActivity.key, nextLane);
   };
 
   const moveSelectedActivity = (direction: -1 | 1) => {
@@ -1512,8 +1566,17 @@ export default function PlantUmlWorkspace() {
   const clearActivityDrag = () => {
     activityPointerDragRef.current = null;
     activityDropTargetRef.current = null;
+    activityLaneTargetRef.current = "";
     setDraggedActivityKey("");
     setActivityDropTarget(null);
+    setActivityLaneTarget("");
+  };
+
+  const clearNewActivityDrag = () => {
+    newActivityPointerDragRef.current = null;
+    newActivityDropTargetRef.current = null;
+    setIsNewActivityDragging(false);
+    setNewActivityDropTarget(null);
   };
 
   const reorderActivityByDrop = (
@@ -1555,17 +1618,33 @@ export default function PlantUmlWorkspace() {
     );
   };
 
-  const getActivityDropTargetAtPoint = (clientX: number, clientY: number) => {
+  const getActivityDropTargetAtPoint = (
+    clientX: number,
+    clientY: number,
+    excludedKey = "",
+  ) => {
     const element = document
       .elementFromPoint(clientX, clientY)
       ?.closest<HTMLButtonElement>(".activity-hit-target");
     const key = element?.dataset.activityKey;
-    const drag = activityPointerDragRef.current;
-    if (!element || !key || !drag || key === drag.activityKey) return null;
+    if (!element || !key || key === excludedKey) return null;
     const rect = element.getBoundingClientRect();
     const position: ActivityDropPosition =
       clientY < rect.top + rect.height / 2 ? "before" : "after";
     return { key, position };
+  };
+
+  const getSwimlaneAtPoint = (clientX: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas || !swimlanes.length || transformRef.current.scale <= 0) return null;
+    const canvasRect = canvas.getBoundingClientRect();
+    const naturalX =
+      (clientX - canvasRect.left - transformRef.current.x) /
+      transformRef.current.scale;
+    return (
+      swimlanes.find((lane) => naturalX >= lane.x0 && naturalX <= lane.x1) ??
+      null
+    );
   };
 
   const handleActivityPointerDown = (
@@ -1581,6 +1660,7 @@ export default function PlantUmlWorkspace() {
       startX: event.clientX,
       startY: event.clientY,
       active: false,
+      intent: null,
     };
     selectEditableActivity(activityKey);
   };
@@ -1597,13 +1677,36 @@ export default function PlantUmlWorkspace() {
     if (!drag.active && distance < 6) return;
     if (!drag.active) {
       drag.active = true;
+      drag.intent =
+        Math.abs(event.clientX - drag.startX) >
+        Math.abs(event.clientY - drag.startY)
+          ? "lane"
+          : "reorder";
       suppressActivityClickRef.current = true;
       setDraggedActivityKey(drag.activityKey);
     }
     event.preventDefault();
-    const target = getActivityDropTargetAtPoint(event.clientX, event.clientY);
-    activityDropTargetRef.current = target;
-    setActivityDropTarget(target);
+    if (drag.intent === "lane") {
+      const lane = getSwimlaneAtPoint(event.clientX);
+      const sourceLane = editableActivities.find(
+        (activity) => activity.key === drag.activityKey,
+      )?.lane;
+      const nextLane = lane && lane.name !== sourceLane ? lane.name : "";
+      activityLaneTargetRef.current = nextLane;
+      setActivityLaneTarget(nextLane);
+      activityDropTargetRef.current = null;
+      setActivityDropTarget(null);
+    } else {
+      const target = getActivityDropTargetAtPoint(
+        event.clientX,
+        event.clientY,
+        drag.activityKey,
+      );
+      activityDropTargetRef.current = target;
+      setActivityDropTarget(target);
+      activityLaneTargetRef.current = "";
+      setActivityLaneTarget("");
+    }
   };
 
   const handleActivityPointerEnd = (
@@ -1611,15 +1714,77 @@ export default function PlantUmlWorkspace() {
   ) => {
     const drag = activityPointerDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const target =
-      getActivityDropTargetAtPoint(event.clientX, event.clientY) ??
-      activityDropTargetRef.current;
+    const target = drag.intent === "reorder"
+      ? getActivityDropTargetAtPoint(
+          event.clientX,
+          event.clientY,
+          drag.activityKey,
+        ) ?? activityDropTargetRef.current
+      : null;
+    const laneTarget =
+      drag.intent === "lane"
+        ? getSwimlaneAtPoint(event.clientX)?.name ??
+          activityLaneTargetRef.current
+        : "";
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     clearActivityDrag();
-    if (drag.active && target) {
+    if (drag.active && laneTarget) {
+      changeActivityLane(drag.activityKey, laneTarget);
+    } else if (drag.active && target) {
       reorderActivityByDrop(drag.activityKey, target.key, target.position);
+    }
+  };
+
+  const handleNewActivityPointerDown = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    event.stopPropagation();
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    newActivityPointerDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+    };
+  };
+
+  const handleNewActivityPointerMove = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    const drag = newActivityPointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const distance = Math.hypot(
+      event.clientX - drag.startX,
+      event.clientY - drag.startY,
+    );
+    if (!drag.active && distance < 6) return;
+    if (!drag.active) {
+      drag.active = true;
+      setIsNewActivityDragging(true);
+    }
+    event.preventDefault();
+    const target = getActivityDropTargetAtPoint(event.clientX, event.clientY);
+    newActivityDropTargetRef.current = target;
+    setNewActivityDropTarget(target);
+  };
+
+  const handleNewActivityPointerEnd = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    const drag = newActivityPointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const target =
+      getActivityDropTargetAtPoint(event.clientX, event.clientY) ??
+      newActivityDropTargetRef.current;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    clearNewActivityDrag();
+    if (drag.active && target) {
+      addActivityAtDrop(target.key, target.position);
     }
   };
 
@@ -2396,7 +2561,7 @@ export default function PlantUmlWorkspace() {
                 <div className="activity-editor-heading">
                   <div>
                     <strong>箱を編集</strong>
-                    <span>図の箱を選択・ドラッグして並べ替え</span>
+                    <span>縦ドラッグで順番・横ドラッグで主体を変更</span>
                   </div>
                   <button
                     type="button"
@@ -2441,6 +2606,23 @@ export default function PlantUmlWorkspace() {
                     )}
                   </button>
                 </div>
+
+                <button
+                  type="button"
+                  className={`activity-new-drag-button ${isNewActivityDragging ? "is-dragging" : ""}`}
+                  aria-pressed={isNewActivityDragging}
+                  onPointerDown={handleNewActivityPointerDown}
+                  onPointerMove={handleNewActivityPointerMove}
+                  onPointerUp={handleNewActivityPointerEnd}
+                  onPointerCancel={handleNewActivityPointerEnd}
+                >
+                  <PlusCircle size={17} />
+                  <span>
+                    <b>新しい箱をドラッグ</b>
+                    <small>箱の上半分・下半分へドロップ</small>
+                  </span>
+                  <GripVertical size={17} aria-hidden="true" />
+                </button>
 
                 <label className="activity-field">
                   <span>編集する箱</span>
@@ -2543,7 +2725,7 @@ export default function PlantUmlWorkspace() {
                   </p>
                 )}
                 <p className="activity-editor-note">
-                  箱を別の箱の上半分・下半分へドロップすると、その前・後へ移動します。分岐・ループの境界は越えられません。
+                  箱は動かし始めた方向で操作を判定します。縦なら前後移動、横なら主体変更です。新しい箱も挿入線を確認して追加できます。
                 </p>
               </aside>
             )}
@@ -2736,11 +2918,28 @@ export default function PlantUmlWorkspace() {
                   alt="PlantUMLで生成した図"
                   draggable={false}
                 />
+                {isEditMode && targetSwimlane && (
+                  <div
+                    className="activity-lane-drop-preview"
+                    style={{
+                      left: targetSwimlane.x0,
+                      top: targetSwimlane.headerBottom,
+                      width: targetSwimlane.x1 - targetSwimlane.x0,
+                      height: Math.max(
+                        1,
+                        diagramSize.height - targetSwimlane.headerBottom,
+                      ),
+                    }}
+                    aria-hidden="true"
+                  >
+                    <span>{targetSwimlane.name}へ移動</span>
+                  </div>
+                )}
                 {isEditMode &&
                   activityShapes.map((shape) => (
                     <button
                       type="button"
-                      className={`activity-hit-target ${selectedActivityKey === shape.activityKey ? "is-selected" : ""} ${draggedActivityKey === shape.activityKey ? "is-dragging" : ""} ${activityDropTarget?.key === shape.activityKey ? `drop-${activityDropTarget.position}` : ""}`}
+                      className={`activity-hit-target ${selectedActivityKey === shape.activityKey ? "is-selected" : ""} ${draggedActivityKey === shape.activityKey ? "is-dragging" : ""} ${activityDropTarget?.key === shape.activityKey ? `drop-${activityDropTarget.position}` : ""} ${newActivityDropTarget?.key === shape.activityKey ? `add-${newActivityDropTarget.position}` : ""}`}
                       style={{
                         left: shape.x,
                         top: shape.y,
@@ -2751,7 +2950,7 @@ export default function PlantUmlWorkspace() {
                       aria-label="この箱を編集"
                       aria-grabbed={draggedActivityKey === shape.activityKey}
                       data-activity-key={shape.activityKey}
-                      title="クリックして編集・ドラッグして順番を変更"
+                      title="クリックして編集・縦ドラッグで順番変更・横ドラッグで主体変更"
                       onPointerDown={(event) =>
                         handleActivityPointerDown(event, shape.activityKey)
                       }

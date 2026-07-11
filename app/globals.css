@@ -620,7 +620,9 @@ kbd {
 }
 
 .activity-hit-target.drop-before::before,
-.activity-hit-target.drop-after::after {
+.activity-hit-target.drop-after::after,
+.activity-hit-target.add-before::before,
+.activity-hit-target.add-after::after {
   position: absolute;
   right: -5px;
   left: -5px;
@@ -637,6 +639,48 @@ kbd {
 
 .activity-hit-target.drop-after::after {
   bottom: -7px;
+}
+
+.activity-hit-target.add-before::before,
+.activity-hit-target.add-after::after {
+  height: 5px;
+  background: #18a66a;
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.94),
+    0 0 0 4px rgba(24, 166, 106, 0.2);
+}
+
+.activity-hit-target.add-before::before {
+  top: -8px;
+}
+
+.activity-hit-target.add-after::after {
+  bottom: -8px;
+}
+
+.activity-lane-drop-preview {
+  position: absolute;
+  z-index: 1;
+  display: grid;
+  place-items: start center;
+  border: 3px solid rgba(24, 166, 106, 0.82);
+  background: rgba(24, 166, 106, 0.13);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.72);
+  pointer-events: none;
+}
+
+.activity-lane-drop-preview span {
+  position: sticky;
+  top: 8px;
+  margin-top: 8px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: #08794a;
+  box-shadow: 0 4px 12px rgba(3, 57, 34, 0.2);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .activity-hit-target:hover,
@@ -716,6 +760,46 @@ kbd {
 .activity-history-buttons {
   grid-template-columns: 1fr 1fr;
   margin-bottom: 12px;
+}
+
+.activity-new-drag-button {
+  display: grid;
+  width: 100%;
+  min-height: 54px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 12px;
+  padding: 7px 9px;
+  border: 1px dashed #70b995;
+  border-radius: 9px;
+  background: #effaf4;
+  color: #176346;
+  cursor: grab;
+  touch-action: none;
+}
+
+.activity-new-drag-button:active,
+.activity-new-drag-button.is-dragging {
+  border-style: solid;
+  background: #dff6e9;
+  cursor: grabbing;
+}
+
+.activity-new-drag-button > span {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+  text-align: left;
+}
+
+.activity-new-drag-button b {
+  font-size: 12px;
+}
+
+.activity-new-drag-button small {
+  color: #4f7d69;
+  font-size: 10px;
 }
 
 .activity-history-buttons .activity-diff-button {
