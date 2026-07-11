@@ -692,6 +692,41 @@ kbd {
     0 0 0 2px rgba(255, 255, 255, 0.65) inset;
 }
 
+.structure-hit-target {
+  position: absolute;
+  z-index: 3;
+  display: block;
+  padding: 0;
+  border: 2px solid rgba(180, 83, 9, 0.5);
+  background: rgba(245, 158, 11, 0.1);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+.structure-hit-target.is-while {
+  border-color: rgba(5, 150, 105, 0.55);
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.structure-hit-target:hover,
+.structure-hit-target.is-selected,
+.structure-hit-target:focus-visible {
+  border-color: #d97706;
+  background: rgba(245, 158, 11, 0.24);
+  filter: drop-shadow(0 0 5px rgba(217, 119, 6, 0.42));
+  outline: 0;
+}
+
+.structure-hit-target.is-while:hover,
+.structure-hit-target.is-while.is-selected,
+.structure-hit-target.is-while:focus-visible {
+  border-color: #059669;
+  background: rgba(16, 185, 129, 0.22);
+  filter: drop-shadow(0 0 5px rgba(5, 150, 105, 0.38));
+}
+
 .activity-editor-panel {
   position: absolute;
   z-index: 12;
@@ -1057,7 +1092,7 @@ kbd {
 
 .structure-editor-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   border-bottom: 1px solid #dce4ef;
   background: #f8fafc;
 }
@@ -1158,7 +1193,8 @@ kbd {
 
 .structure-primary-action,
 .structure-branch-choice button,
-.fork-actions button {
+.fork-actions button,
+.structure-delete-actions button {
   display: inline-flex;
   min-height: 40px;
   align-items: center;
@@ -1172,6 +1208,39 @@ kbd {
   cursor: pointer;
   font-size: 11px;
   font-weight: 720;
+}
+
+.structure-delete-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.structure-delete-actions button {
+  border-color: #cad5e3;
+  background: #fff;
+}
+
+.structure-delete-actions .structure-danger-action {
+  border-color: #efc7cb;
+  background: #fff5f5;
+  color: #a52f39;
+}
+
+.structure-delete-actions button:hover {
+  border-color: #8fa4bf;
+  background: #f4f7fb;
+}
+
+.structure-delete-actions .structure-danger-action:hover {
+  border-color: #dc7d87;
+  background: #ffe9eb;
+}
+
+.structure-safety-note {
+  padding: 10px 11px;
+  border-radius: 8px;
+  background: #f4f7fb;
 }
 
 .structure-primary-action {
@@ -1954,6 +2023,7 @@ kbd {
 
   .structure-two-columns,
   .structure-branch-choice,
+  .structure-delete-actions,
   .fork-actions {
     grid-template-columns: 1fr;
   }

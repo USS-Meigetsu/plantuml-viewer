@@ -163,6 +163,15 @@ type ActivityShape = {
   width: number;
   height: number;
 };
+type StructureShape = {
+  key: string;
+  kind: "if" | "while";
+  startLine: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
 type ActivityDropPosition = "before" | "after";
 type ActivityDragIntent = "reorder" | "lane";
 type SourceDiffLine = {
@@ -195,7 +204,12 @@ type ForkStructure = {
   indent: string;
   branches: ForkBranch[];
 };
-type StructureEditorTab = "add-if" | "move-branch" | "connection" | "control";
+type StructureEditorTab =
+  | "edit-if"
+  | "add-if"
+  | "move-branch"
+  | "connection"
+  | "control";
 let enginePromise: Promise<EngineModule> | null = null;
 let renderQueue: Promise<void> = Promise.resolve();
 
@@ -750,6 +764,116 @@ function extractActivityShapes(svg: string, source: string): ActivityShape[] {
   return shapes;
 }
 
+function extractStructureShapes(svg: string, source: string): StructureShape[] {
+  const conditions = [
+    ...parseIfStructures(source).map((structure) => ({
+      key: `if:${structure.startLine}`,
+      kind: "if" as const,
+      startLine: structure.startLine,
+      label: structure.condition,
+    })),
+    ...parseWhileStructures(source).map((structure) => ({
+      key: `while:${structure.startLine}`,
+      kind: "while" as const,
+      startLine: structure.startLine,
+      label: structure.condition,
+    })),
+  ];
+  if (!conditions.length) return [];
+
+  const document = new DOMParser().parseFromString(svg, "image/svg+xml");
+  if (document.querySelector("parsererror")) return [];
+  const root = document.documentElement;
+  const viewBox = root.getAttribute("viewBox")?.split(/[ ,]+/).map(Number);
+  const minX = viewBox?.length === 4 && Number.isFinite(viewBox[0]) ? viewBox[0] : 0;
+  const minY = viewBox?.length === 4 && Number.isFinite(viewBox[1]) ? viewBox[1] : 0;
+
+  const diamonds = Array.from(document.querySelectorAll("polygon"))
+    .map((polygon) => {
+      const values = (polygon.getAttribute("points") ?? "")
+        .trim()
+        .split(/[ ,]+/)
+        .map(Number)
+        .filter(Number.isFinite);
+      const xs = values.filter((_, index) => index % 2 === 0);
+      const ys = values.filter((_, index) => index % 2 === 1);
+      if (xs.length < 3 || ys.length < 3) return null;
+      const x = Math.min(...xs);
+      const y = Math.min(...ys);
+      return {
+        x,
+        y,
+        width: Math.max(...xs) - x,
+        height: Math.max(...ys) - y,
+      };
+    })
+    .filter(
+      (shape): shape is { x: number; y: number; width: number; height: number } =>
+        Boolean(shape && shape.width >= 16 && shape.height >= 12),
+    );
+  const texts = Array.from(document.querySelectorAll("text"))
+    .map((element, index) => {
+      const position = getSvgTextPosition(element);
+      return {
+        index,
+        label: normalizeActivityLabel(element.textContent ?? ""),
+        x: position.x,
+        y: position.y,
+      };
+    })
+    .filter((text) => text.label && text.x !== null && text.y !== null);
+  const usedTexts = new Set<number>();
+  const usedDiamonds = new Set<number>();
+  const shapes: StructureShape[] = [];
+
+  for (const condition of conditions) {
+    const wanted = normalizeActivityLabel(condition.label);
+    const text = texts.find(
+      (candidate) =>
+        !usedTexts.has(candidate.index) &&
+        (candidate.label === wanted ||
+          candidate.label.replace(/\s/g, "") === wanted.replace(/\s/g, "")),
+    );
+    if (!text || text.x === null || text.y === null) continue;
+    let diamondIndex = diamonds.findIndex(
+      (diamond, index) =>
+        !usedDiamonds.has(index) &&
+        text.x! >= diamond.x - 5 &&
+        text.x! <= diamond.x + diamond.width + 5 &&
+        text.y! >= diamond.y - 5 &&
+        text.y! <= diamond.y + diamond.height + 9,
+    );
+    if (diamondIndex < 0) {
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      diamonds.forEach((diamond, index) => {
+        if (usedDiamonds.has(index)) return;
+        const distance = Math.hypot(
+          text.x! - (diamond.x + diamond.width / 2),
+          text.y! - (diamond.y + diamond.height / 2),
+        );
+        if (distance < nearestDistance && distance < 90) {
+          nearestDistance = distance;
+          diamondIndex = index;
+        }
+      });
+    }
+    if (diamondIndex < 0) continue;
+    const diamond = diamonds[diamondIndex];
+    usedTexts.add(text.index);
+    usedDiamonds.add(diamondIndex);
+    shapes.push({
+      key: condition.key,
+      kind: condition.kind,
+      startLine: condition.startLine,
+      x: diamond.x - minX - 4,
+      y: diamond.y - minY - 4,
+      width: diamond.width + 8,
+      height: diamond.height + 8,
+    });
+  }
+  return shapes;
+}
+
 function canMoveActivity(
   source: string,
   activities: EditableActivity[],
@@ -1113,6 +1237,7 @@ export default function PlantUmlWorkspace() {
   const [diagramType, setDiagramType] = useState("");
   const [swimlanes, setSwimlanes] = useState<Swimlane[]>([]);
   const [activityShapes, setActivityShapes] = useState<ActivityShape[]>([]);
+  const [structureShapes, setStructureShapes] = useState<StructureShape[]>([]);
   const [isEditMode, setIsEditMode] = useState(false);
   const [selectedActivityKey, setSelectedActivityKey] = useState("");
   const [activityLabelDraft, setActivityLabelDraft] = useState("");
@@ -1127,6 +1252,9 @@ export default function PlantUmlWorkspace() {
   const [newIfNoAction, setNewIfNoAction] = useState("いいえ側の処理");
   const [selectedIfStartLine, setSelectedIfStartLine] = useState(-1);
   const [selectedIfBranch, setSelectedIfBranch] = useState<"yes" | "no">("yes");
+  const [ifConditionDraft, setIfConditionDraft] = useState("");
+  const [ifYesLabelDraft, setIfYesLabelDraft] = useState("はい");
+  const [ifNoLabelDraft, setIfNoLabelDraft] = useState("いいえ");
   const [connectionTargetKey, setConnectionTargetKey] = useState("");
   const [selectedControlKey, setSelectedControlKey] = useState("");
   const [whileConditionDraft, setWhileConditionDraft] = useState("");
@@ -1433,6 +1561,7 @@ export default function PlantUmlWorkspace() {
       setDiagramType("");
       setSwimlanes([]);
       setActivityShapes([]);
+      setStructureShapes([]);
       setLimitError(null);
       textareaRef.current?.focus();
       return;
@@ -1441,6 +1570,7 @@ export default function PlantUmlWorkspace() {
     const requestId = ++renderRequestRef.current;
     setRenderState("loading");
     setActivityShapes([]);
+    setStructureShapes([]);
     setStatusMessage("描画エンジンを準備しています…");
     setErrorDetails("");
     setErrorCopied(false);
@@ -1468,6 +1598,7 @@ export default function PlantUmlWorkspace() {
         setDiagramType("");
         setSwimlanes([]);
         setActivityShapes([]);
+        setStructureShapes([]);
         setRenderedSource("");
         setRenderState("error");
         setStatusMessage("描画できませんでした。エラー内容を確認してください。");
@@ -1483,6 +1614,7 @@ export default function PlantUmlWorkspace() {
       setDiagramType(detectDiagramType(normalized.source));
       setSwimlanes(extractSwimlanes(safeSvg, normalized.source));
       setActivityShapes(extractActivityShapes(safeSvg, normalized.source));
+      setStructureShapes(extractStructureShapes(safeSvg, normalized.source));
       setRenderState("success");
       setStatusMessage(
         normalized.strippedMarkdownFence
@@ -1505,6 +1637,7 @@ export default function PlantUmlWorkspace() {
       setDiagramType("");
       setSwimlanes([]);
       setActivityShapes([]);
+      setStructureShapes([]);
       setRenderedSource("");
       setRenderState("error");
       setStatusMessage("描画できませんでした。エラー内容を確認してください。");
@@ -1778,9 +1911,10 @@ export default function PlantUmlWorkspace() {
       return;
     }
     const indent = selectedActivity.indent;
+    const ifStartLine = selectedActivity.endLine + 1;
     const nextLines = source.split(/\r\n|\r|\n/);
     nextLines.splice(
-      selectedActivity.endLine + 1,
+      ifStartLine,
       0,
       `${indent}if (${condition}) then (はい)`,
       `${indent}  :${yesAction};`,
@@ -1793,6 +1927,79 @@ export default function PlantUmlWorkspace() {
       "選択した箱の後に条件分岐を追加しました",
       selectedActivityIndex + 1,
     );
+    setSelectedIfStartLine(ifStartLine);
+    setIfConditionDraft(condition);
+    setIfYesLabelDraft("はい");
+    setIfNoLabelDraft("いいえ");
+    setStructureEditorTab("edit-if");
+  };
+
+  const loadIfDrafts = (structure: IfStructure) => {
+    setIfConditionDraft(structure.condition);
+    setIfYesLabelDraft(structure.yesLabel);
+    setIfNoLabelDraft(structure.noLabel);
+  };
+
+  const updateSelectedIfStructure = () => {
+    if (!selectedIfStructure) return;
+    const condition = ifConditionDraft.trim();
+    const yesLabel = ifYesLabelDraft.trim();
+    const noLabel = ifNoLabelDraft.trim();
+    if (!condition || !yesLabel || !noLabel) {
+      setEditMessage("IFの条件・はい・いいえラベルを入力してください");
+      return;
+    }
+    if ([condition, yesLabel, noLabel].some((value) => /[;\r\n]/.test(value))) {
+      setEditMessage("IFの入力欄には改行や半角セミコロン（;）を使用できません");
+      return;
+    }
+    const nextLines = source.split(/\r\n|\r|\n/);
+    nextLines[selectedIfStructure.startLine] =
+      `${selectedIfStructure.indent}if (${condition}) then (${yesLabel})`;
+    nextLines[selectedIfStructure.elseLine] =
+      `${selectedIfStructure.indent}else (${noLabel})`;
+    applyVisualEdit(nextLines.join("\n"), "IFの条件とラベルを変更しました");
+  };
+
+  const unwrapSelectedIfStructure = () => {
+    if (!selectedIfStructure) return;
+    const lines = source.split(/\r\n|\r|\n/);
+    const branchIndent = `${selectedIfStructure.indent}  `;
+    const yesLines = reindentLines(
+      lines.slice(selectedIfStructure.startLine + 1, selectedIfStructure.elseLine),
+      branchIndent,
+      selectedIfStructure.indent,
+    );
+    const noLines = reindentLines(
+      lines.slice(selectedIfStructure.elseLine + 1, selectedIfStructure.endLine),
+      branchIndent,
+      selectedIfStructure.indent,
+    );
+    const nextSource = replaceSourceLines(
+      source,
+      selectedIfStructure.startLine,
+      selectedIfStructure.endLine,
+      [...yesLines, ...noLines],
+    );
+    setSelectedIfStartLine(-1);
+    setStructureEditorTab("add-if");
+    applyVisualEdit(
+      nextSource,
+      "IFの分岐を解除し、両側の箱を「はい→いいえ」の順に残しました",
+    );
+  };
+
+  const deleteSelectedIfStructure = () => {
+    if (!selectedIfStructure) return;
+    const nextSource = replaceSourceLines(
+      source,
+      selectedIfStructure.startLine,
+      selectedIfStructure.endLine,
+      [],
+    );
+    setSelectedIfStartLine(-1);
+    setStructureEditorTab("add-if");
+    applyVisualEdit(nextSource, "IFと中の箱をまとめて削除しました");
   };
 
   const moveSelectedActivityToBranch = () => {
@@ -1968,12 +2175,38 @@ export default function PlantUmlWorkspace() {
     }
   };
 
+  const selectIfStructureForEdit = (startLine: number) => {
+    const structure = ifStructures.find(
+      (candidate) => candidate.startLine === startLine,
+    );
+    if (!structure) return;
+    setSelectedIfStartLine(startLine);
+    loadIfDrafts(structure);
+    setStructureEditorTab("edit-if");
+    setIsDiffOpen(false);
+    setIsStructureEditorOpen(true);
+    setEditMessage("");
+  };
+
+  const selectWhileStructureForEdit = (startLine: number) => {
+    const key = `while:${startLine}`;
+    if (!whileStructures.some((structure) => structure.startLine === startLine)) {
+      return;
+    }
+    chooseControlStructure(key);
+    setStructureEditorTab("control");
+    setIsDiffOpen(false);
+    setIsStructureEditorOpen(true);
+    setEditMessage("");
+  };
+
   const openStructureEditor = () => {
     setIsDiffOpen(false);
     setIsStructureEditorOpen(true);
     setEditMessage("");
     if (ifStructures.length && selectedIfStartLine < 0) {
       setSelectedIfStartLine(ifStructures[0].startLine);
+      loadIfDrafts(ifStructures[0]);
     }
     if (connectionTargets.length && !connectionTargetKey) {
       setConnectionTargetKey(connectionTargets[0].key);
@@ -3263,6 +3496,7 @@ export default function PlantUmlWorkspace() {
 
                 <div className="structure-editor-tabs" role="tablist">
                   {([
+                    ["edit-if", "IFを編集"],
                     ["add-if", "分岐を追加"],
                     ["move-branch", "はい／いいえへ移動"],
                     ["connection", "接続先を変更"],
@@ -3282,6 +3516,100 @@ export default function PlantUmlWorkspace() {
                 </div>
 
                 <div className="structure-editor-content">
+                  {structureEditorTab === "edit-if" && (
+                    <div className="structure-editor-section">
+                      <h3>IF条件分岐を編集</h3>
+                      {ifStructures.length && selectedIfStructure ? (
+                        <>
+                          <label className="structure-field">
+                            <span>編集するIF</span>
+                            <select
+                              value={selectedIfStructure.startLine}
+                              onChange={(event) => {
+                                const startLine = Number(event.target.value);
+                                const structure = ifStructures.find(
+                                  (candidate) => candidate.startLine === startLine,
+                                );
+                                if (structure) {
+                                  setSelectedIfStartLine(startLine);
+                                  loadIfDrafts(structure);
+                                }
+                              }}
+                            >
+                              {ifStructures.map((structure) => (
+                                <option
+                                  value={structure.startLine}
+                                  key={structure.startLine}
+                                >
+                                  {`${structure.startLine + 1}行目：${structure.condition}`}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="structure-field">
+                            <span>IF条件</span>
+                            <input
+                              value={ifConditionDraft}
+                              onChange={(event) =>
+                                setIfConditionDraft(event.target.value)
+                              }
+                            />
+                          </label>
+                          <div className="structure-two-columns">
+                            <label className="structure-field">
+                              <span>はい側のラベル</span>
+                              <input
+                                value={ifYesLabelDraft}
+                                onChange={(event) =>
+                                  setIfYesLabelDraft(event.target.value)
+                                }
+                              />
+                            </label>
+                            <label className="structure-field">
+                              <span>いいえ側のラベル</span>
+                              <input
+                                value={ifNoLabelDraft}
+                                onChange={(event) =>
+                                  setIfNoLabelDraft(event.target.value)
+                                }
+                              />
+                            </label>
+                          </div>
+                          <button
+                            type="button"
+                            className="structure-primary-action"
+                            onClick={updateSelectedIfStructure}
+                          >
+                            <PencilLine size={16} /> IFを更新
+                          </button>
+                          <div className="structure-delete-actions">
+                            <button
+                              type="button"
+                              onClick={unwrapSelectedIfStructure}
+                            >
+                              分岐だけ解除（箱は残す）
+                            </button>
+                            <button
+                              type="button"
+                              className="structure-danger-action"
+                              onClick={deleteSelectedIfStructure}
+                            >
+                              <Trash2 size={15} /> IF全体を削除
+                            </button>
+                          </div>
+                          <p className="structure-safety-note">
+                            「分岐だけ解除」は、はい側・いいえ側の箱をその順で残します。
+                            「IF全体を削除」は中の箱も削除します。どちらも元に戻せます。
+                          </p>
+                        </>
+                      ) : (
+                        <p className="structure-empty">
+                          編集できる if / else / endif 分岐がありません。
+                        </p>
+                      )}
+                    </div>
+                  )}
+
                   {structureEditorTab === "add-if" && (
                     <div className="structure-editor-section">
                       <h3>選択した箱の後に条件分岐を追加</h3>
@@ -3698,6 +4026,48 @@ export default function PlantUmlWorkspace() {
                     <span>{targetSwimlane.name}へ移動</span>
                   </div>
                 )}
+                {isEditMode &&
+                  structureShapes.map((shape) => {
+                    const ifStructure =
+                      shape.kind === "if"
+                        ? ifStructures.find(
+                            (structure) => structure.startLine === shape.startLine,
+                          )
+                        : null;
+                    const whileStructure =
+                      shape.kind === "while"
+                        ? whileStructures.find(
+                            (structure) => structure.startLine === shape.startLine,
+                          )
+                        : null;
+                    const label =
+                      ifStructure?.condition ?? whileStructure?.condition ?? "条件";
+                    const isSelected =
+                      shape.kind === "if"
+                        ? selectedIfStartLine === shape.startLine
+                        : selectedControlKey === `while:${shape.startLine}`;
+                    return (
+                      <button
+                        type="button"
+                        className={`structure-hit-target is-${shape.kind} ${isSelected ? "is-selected" : ""}`}
+                        style={{
+                          left: shape.x,
+                          top: shape.y,
+                          width: shape.width,
+                          height: shape.height,
+                        }}
+                        key={shape.key}
+                        aria-label={`${shape.kind === "if" ? "IF" : "while"}条件「${label}」を編集`}
+                        title={`${shape.kind === "if" ? "IF" : "while"}条件をクリックして編集`}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={() =>
+                          shape.kind === "if"
+                            ? selectIfStructureForEdit(shape.startLine)
+                            : selectWhileStructureForEdit(shape.startLine)
+                        }
+                      />
+                    );
+                  })}
                 {isEditMode &&
                   activityShapes.map((shape) => (
                     <button
