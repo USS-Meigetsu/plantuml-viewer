@@ -12,8 +12,10 @@
     "dev": "vite",
     "prebuild": "npm run prepare:plantuml",
     "build": "bash scripts/build-verified.sh",
+    "build:pages": "npm run prepare:plantuml && next build",
     "start": "vinext start",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
+    "test:pages": "npm run build:pages && node --test tests/static-export.test.mjs",
     "validate:artifact": "bash scripts/validate-artifact.sh",
     "lint": "bash scripts/sites-env.sh -- eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern 'public/plantuml/*.js'"
   },

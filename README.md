@@ -2,7 +2,7 @@
 
 大きなPlantUML図を、ブラウザだけで安全に描画・確認できる日本語ビューアーです。
 
-**公開サイト:** https://plantuml-viewer.ritia-3300.chatgpt.site
+**公開サイト:** https://plantuml.massivedyno.com
 
 ## 特長
 
@@ -43,7 +43,15 @@ npm run dev       # 開発サーバー
 npm run lint      # ESLint
 npm test          # 本番ビルドと基本テスト
 npm run build     # Sites向け本番ビルド
+npm run test:pages # Cloudflare Pages向け静的ビルドと基本テスト
 ```
+
+## Cloudflare Pages
+
+`codex/cloudflare-pages` ブランチは、Cloudflare Pages向けの完全な静的サイトを
+`out/` に出力します。Pagesのビルドコマンドは `npm run build:pages`、出力先は
+`out` です。HTMLと画面用アセットはCloudflareのエッジから配信され、PlantUML
+描画エンジンは利用者が初めて図を描画するときだけブラウザへ読み込まれます。
 
 ## 描画上限
 

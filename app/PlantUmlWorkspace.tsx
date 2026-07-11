@@ -101,6 +101,7 @@ const LANE_GUIDE_TOP = 64;
 
 declare global {
   interface Window {
+    __PLANTUML_ENGINE__?: EngineModule;
     __PLANTUML_VIEWER_LIMIT__?: number;
   }
 }
@@ -137,7 +138,7 @@ type NormalizedSource = {
 let enginePromise: Promise<EngineModule> | null = null;
 let renderQueue: Promise<void> = Promise.resolve();
 
-function loadClassicScript(src: string) {
+function loadScript(src: string, type: "classic" | "module" = "classic") {
   return new Promise<void>((resolve, reject) => {
     const existing = document.querySelector<HTMLScriptElement>(
       `script[data-plantuml-runtime="${src}"]`,
@@ -159,6 +160,7 @@ function loadClassicScript(src: string) {
     const script = document.createElement("script");
     script.src = src;
     script.async = true;
+    if (type === "module") script.type = "module";
     script.dataset.plantumlRuntime = src;
     script.addEventListener(
       "load",
@@ -180,12 +182,15 @@ function loadClassicScript(src: string) {
 async function loadPlantUmlEngine() {
   if (!enginePromise) {
     enginePromise = (async () => {
-      await loadClassicScript("/plantuml/viz-global.js");
-      const moduleUrl = new URL(
-        "/plantuml/plantuml.js?v=dynamic-limit-1",
-        window.location.origin,
-      ).href;
-      return import(/* @vite-ignore */ moduleUrl) as Promise<EngineModule>;
+      await loadScript("/plantuml/viz-global.js");
+      await loadScript(
+        "/plantuml/plantuml-loader.js?v=dynamic-limit-1",
+        "module",
+      );
+      if (!window.__PLANTUML_ENGINE__) {
+        throw new Error("PlantUML描画エンジンを初期化できませんでした。");
+      }
+      return window.__PLANTUML_ENGINE__;
     })();
   }
   return enginePromise;

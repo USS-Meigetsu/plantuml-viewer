@@ -34,4 +34,8 @@ plantUml = replaceExactlyOnce(
 plantUml = replaceExactlyOnce(plantUml, "(max 4096)", "(max 8192)");
 
 await writeFile(resolve(outputRoot, "plantuml.js"), plantUml);
+await writeFile(
+  resolve(outputRoot, "plantuml-loader.js"),
+  'import * as engine from "./plantuml.js";\n\nwindow.__PLANTUML_ENGINE__ = engine;\n',
+);
 console.log("Prepared @plantuml/core browser assets with the viewer limit patch.");

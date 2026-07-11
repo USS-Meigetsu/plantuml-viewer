@@ -16,9 +16,6 @@ export const metadata: Metadata = {
   title: "PlantUML Viewer — 大きな図を自由に確認",
   description:
     "PlantUMLをブラウザ内で描画し、拡大・縮小・移動・全画面表示・画像保存ができるビューアーです。",
-  other: {
-    "codex-preview": "development",
-  },
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
