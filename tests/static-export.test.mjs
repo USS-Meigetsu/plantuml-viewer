@@ -16,4 +16,5 @@ test("exports a standalone Cloudflare Pages site", async () => {
   await access(new URL("out/plantuml/plantuml-loader.js", projectRoot));
   await access(new URL("out/plantuml/viz-global.js", projectRoot));
   await access(new URL("out/_headers", projectRoot));
+  await access(new URL("out/_redirects", projectRoot));
 });
